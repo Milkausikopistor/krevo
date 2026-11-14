@@ -1,0 +1,22 @@
+# Carteiras e dados de nós — NUNCA versionar (chaves, saldos, blocos)
+carteira-*.json
+*.carteira.json
+dados/
+data/
+data-*/
+blocos.dat
+
+# Compilados (o núcleo WebAssembly compilado, src/crypto/krevo_core.wasm, É versionado)
+target/
+node_modules/
+
+# Gerados por scripts e testes
+devnet-resultado.json
+*.tmp
+*.log
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

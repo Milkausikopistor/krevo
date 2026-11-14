@@ -1,0 +1,16 @@
+{
+  "name": "krevo",
+  "version": "0.1.0",
+  "description": "Krevo (KRV) — proof-of-work BlockDAG (GHOSTDAG) cryptocurrency with optional privacy. Reference implementation.",
+  "type": "module",
+  "bin": { "krevo": "src/cli.js" },
+  "scripts": {
+    "test": "node --test test/",
+    "devnet": "node scripts/devnet.js",
+    "simulate": "node scripts/simulate.js",
+    "emission": "node src/cli.js emissao --rede mainnet"
+  },
+  "engines": { "node": ">=22" },
+  "license": "MIT",
+  "dependencies": {}
+}

@@ -1,0 +1,4 @@
+# Sem wasm-bindgen: a aleatoriedade vem do JavaScript (crypto.getRandomValues / randomBytes)
+# por uma função importada — o backend "custom" do getrandom.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", 'getrandom_backend="custom"', "-C", "debuginfo=0"]

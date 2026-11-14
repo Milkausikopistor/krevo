@@ -1,0 +1,41 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Endereço privado · Explorador Krevo</title><style>
+:root{--bg:#f5f7fb;--panel:#fff;--text:#131826;--muted:#5f6b82;--line:#e2e6ef;--accent:#0f9d84;--blue:#3d6ff2;--red:#e0444f;--chip:#edf1f8;--edge:#c3cad8}
+@media (prefers-color-scheme:dark){:root{--bg:#0b0f19;--panel:#131a29;--text:#e7ebf4;--muted:#8d97ad;--line:#232c41;--accent:#2fd3ae;--blue:#5f8dff;--red:#ff6470;--chip:#1b2437;--edge:#3a4560}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;word-break:break-all}
+header{background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.bar{max-width:1200px;margin:0 auto;padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.brand{display:flex;gap:8px;align-items:center;font-weight:700;font-size:18px;color:var(--text)}.brand:hover{text-decoration:none}
+.net{font-size:12px;background:var(--chip);color:var(--muted);border-radius:99px;padding:2px 9px;font-weight:600}
+form.search{flex:1;min-width:220px;display:flex}form.search input{flex:1;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font-size:14px}
+main{max-width:1200px;margin:0 auto;padding:18px 16px 40px}
+h1{font-size:22px;margin:4px 0 14px}h2{font-size:16px;margin:0 0 10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:16px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;margin-bottom:16px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px}.stat b{display:block;font-size:20px}.stat span{font-size:12px;color:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:860px){.cols{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:12px}
+.kv td:first-child{color:var(--muted);width:210px;white-space:nowrap}@media(max-width:600px){.kv td:first-child{width:auto;white-space:normal}}
+.chip{display:inline-block;font-size:12px;border-radius:99px;padding:1px 8px;background:var(--chip);color:var(--muted);white-space:nowrap}
+.chip.blue{color:var(--blue)}.chip.red{color:var(--red)}.chip.chain{color:var(--accent)}.chip.priv{color:#9b6bff}
+.muted{color:var(--muted)}.right{text-align:right}.amt{white-space:nowrap;font-variant-numeric:tabular-nums}
+.dagwrap{overflow-x:auto;border-radius:10px;background:var(--bg);border:1px solid var(--line)}
+.dag .e{stroke:var(--edge);stroke-width:1}.dag .e.sp{stroke:var(--accent);stroke-width:2.2}
+.dag .n{fill:var(--blue)}.dag .n.red{fill:var(--red)}.dag .n.chain{fill:var(--accent)}.dag .n.tip{stroke:var(--text);stroke-width:1.5;stroke-dasharray:3 2}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}.live:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);animation:p 1.2s infinite}.live.off:before{background:var(--red);animation:none}
+@keyframes p{50%{opacity:.25}}
+.note{background:var(--chip);border-radius:10px;padding:10px 12px;font-size:14px}
+.big{font-size:28px;font-weight:700}
+footer{max-width:1200px;margin:0 auto;padding:0 16px 30px;color:var(--muted);font-size:12px}
+</style></head><body>
+<header><div class="bar"><a class="brand" href="/"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.7 5v10L12 22l-8.7-5V7z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="7.5" r="1.8" fill="currentColor"/><circle cx="7.5" cy="14.5" r="1.8" fill="currentColor"/><circle cx="16.5" cy="14.5" r="1.8" fill="currentColor"/><path d="M12 7.5l-4.5 7M12 7.5l4.5 7M7.5 14.5h9" stroke="currentColor" stroke-width="1.2"/></svg>Explorador Krevo</a><span class="net">devnet</span>
+<form class="search" action="/busca"><input name="q" placeholder="Buscar bloco, transação ou endereço" aria-label="Buscar"></form></div></header>
+<main><h1>Endereço privado</h1>
+<section class="panel"><p class="mono">krsdev1qypptwnlcpwkyexa3j9j4h2mfrmvas2r8y3f90qv7ak65594wmh647qzcz6z9ayes0z49jr3rx8vdhck2ren9a08qklctlfjfcn8xzq8h2cspg7hr4</p>
+<div class="note">🔒 <b>Não há nada para mostrar — e isso é a privacidade funcionando.</b><br>
+Pagamentos a endereços privados usam uma chave de uso único diferente a cada vez, com valor cifrado. Na rede não existe nenhum registro ligando estas saídas a este endereço; nem este explorador, nem o nó, nem ninguém consegue somar o saldo.<br>
+Para auditoria, o dono pode entregar a sua <b>chave de visualização</b> (krw1…) ou uma <b>prova de pagamento</b> (krp1…) de um pagamento específico.</div></section></main><footer>Krevo (KRV) · implementação de referência · as partes privadas das transações são invisíveis por projeto</footer>
+</body></html>
