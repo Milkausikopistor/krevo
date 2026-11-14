@@ -188,3 +188,17 @@ mod tests {
     #[test]
     fn k_is_124() { assert_eq!(compute_ghostdag_k(10.0, 5.0, 0.01), 124); }
 }
+
+/// Nós-semente da rede (seeds/<rede>.txt na raiz do repositório, embutido na compilação).
+pub fn seeds(name: &str) -> Vec<String> {
+    let text = match name {
+        "testnet" => include_str!("../../../seeds/testnet.txt"),
+        "mainnet" => include_str!("../../../seeds/mainnet.txt"),
+        _ => "",
+    };
+    text.lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| l.rsplit_once(':').map(|(h, p)| !h.is_empty() && p.parse::<u16>().is_ok()).unwrap_or(false))
+        .map(String::from)
+        .collect()
+}

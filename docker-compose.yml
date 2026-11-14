@@ -1,0 +1,59 @@
+# Pilha de um operador da testnet pública (exemplo; ajuste ao seu servidor).
+#   docker compose up -d                                   # nó + servidor leve + explorador + app web
+#   ENDERECO_MINERACAO=krvtest1… docker compose --profile minerar up -d
+#   KREVO_SENHA=… docker compose --profile torneira up -d    (depois de criar e abastecer a carteira)
+# Ponha HTTPS na frente (Caddy, nginx…) para o app web, o servidor leve e a torneira.
+# O RPC do nó (16211) fica só na rede interna do Docker: não o exponha na Internet.
+# Guia completo: docs/TESTNET.md
+
+services:
+  no:
+    build: .
+    # nó em Rust (mais rápido); para o nó JavaScript de referência, troque por:
+    #   entrypoint: ["node", "src/cli.js"]   (e o mesmo command)
+    entrypoint: ["krevod"]
+    command: ["no", "--rede", "testnet", "--dados", "/dados", "--rpchost", "0.0.0.0"]
+    volumes: ["dados:/dados"]
+    ports: ["16210:16210"]
+    restart: unless-stopped
+
+  servidor-leve:
+    build: .
+    command: ["servidor-leve", "--rede", "testnet", "--rpc", "http://no:16211", "--publico"]
+    ports: ["8090:8090"]
+    depends_on: [no]
+    restart: unless-stopped
+
+  explorador:
+    build: .
+    command: ["explorador", "--rede", "testnet", "--rpc", "http://no:16211", "--publico"]
+    ports: ["8080:8080"]
+    depends_on: [no]
+    restart: unless-stopped
+
+  carteira-web:
+    build: .
+    command: ["carteira-web", "--publico"]
+    ports: ["8091:8091"]
+    restart: unless-stopped
+
+  minerador:
+    build: .
+    profiles: ["minerar"]
+    command: ["minerar", "--rede", "testnet", "--rpc", "http://no:16211", "--endereco", "${ENDERECO_MINERACAO:?defina ENDERECO_MINERACAO}"]
+    depends_on: [no]
+    restart: unless-stopped
+
+  torneira:
+    build: .
+    profiles: ["torneira"]
+    command: ["torneira", "--rede", "testnet", "--rpc", "http://no:16211", "--arquivo", "/carteira/carteira-torneira-testnet.json", "--publico", "--proxy-confiavel"]
+    environment: ["KREVO_SENHA"]
+    volumes: ["torneira:/carteira"]
+    ports: ["8092:8092"]
+    depends_on: [no]
+    restart: unless-stopped
+
+volumes:
+  dados: {}
+  torneira: {}

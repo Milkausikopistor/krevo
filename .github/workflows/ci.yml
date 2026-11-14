@@ -1,0 +1,66 @@
+# Integração contínua: roda em toda mudança e em todo pull request (gratuito em repositórios
+# públicos do GitHub). Quem contribui vê na hora se quebrou algo.
+name: testes
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  javascript:
+    name: JavaScript (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["24", "26"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Testes com o núcleo WebAssembly
+        run: node --test test/
+      - name: Testes sem WebAssembly (plano B em JavaScript)
+        run: node --test test/
+        env:
+          KREVO_NO_WASM: "1"
+
+  rust:
+    name: Rust (nó krevod e núcleo WebAssembly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26"
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown
+      - name: Testes do nó (vetores do JavaScript, fuzzing, cofre)
+        run: cd rust/krevod && cargo test --release --locked
+      - name: Medição de tempo constante (nativa; informativa — máquinas compartilhadas têm ruído)
+        continue-on-error: true
+        run: cd rust/krevod && cargo test --release --locked ct_timing -- --ignored --nocapture
+      - name: Provador nativo aceito pelo verificador JavaScript
+        run: node --test test/fcmp.test.js
+        env:
+          KREVO_PROVER: rust/krevod/target/release/krevod
+      - name: Núcleo WebAssembly compila
+        run: cd rust/krevo-wasm && cargo build --release --locked --target wasm32-unknown-unknown
+
+  docker:
+    name: Imagem Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir
+        run: docker build -t krevo .
+      - name: Executar
+        run: |
+          docker run --rm krevo emissao --rede testnet | head -5
+          docker run --rm --entrypoint krevod krevo ajuda

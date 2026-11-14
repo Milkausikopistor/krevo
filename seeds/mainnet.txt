@@ -1,0 +1,3 @@
+# Nós-semente da mainnet — vazia de propósito: a mainnet NÃO foi lançada.
+# Ela só pode ser lançada depois da testnet pública, de auditorias independentes e do
+# lançamento justo descrito em docs/WHITEPAPER.md (seção 7.6).

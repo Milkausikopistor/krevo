@@ -12,6 +12,8 @@ import { buildGenesis } from './consensus/consensus.js';
 import { emissionSchedule } from './consensus/emission.js';
 import { startExplorer } from './explorer/server.js';
 import fs from 'node:fs';
+import { seedsFor } from './node/seeds.js';
+import { startFaucet } from './faucet/faucet.js';
 import { encodeQR, qrToTerminal, qrToSvg } from './util/qrcode.js';
 import { createOffer, acceptOffer, importAcceptance, swapStep, listSwaps, describeSwap, getSwap, decodeSwapCode, parseBTC, formatBTC, formatDuration } from './wallet/swap.js';
 import { startSimBitcoin } from './btc/simbtc.js';
@@ -31,7 +33,7 @@ const HELP = `
 Krevo (KRV) — implementação de referência
 
 USO
-  krevo no        [--rede devnet] [--dados ./dados] [--porta N] [--rpcporta N] [--par host:porta ...]
+  krevo no        [--rede devnet] [--dados ./dados] [--porta N] [--rpcporta N] [--rpchost 127.0.0.1] [--par host:porta ...] [--sem-sementes]
   krevo minerar   --endereco ENDEREÇO [--rpc URL] [--threads N]           mineração solo (no seu nó)
   krevo minerar   --pool HOST:PORTA --endereco ENDEREÇO [--threads N] [--trabalhador rig1]   num pool
   krevo pool      --arquivo carteira-do-pool.json [--porta 5555] [--porta-web 8081] [--taxa 1]
@@ -101,9 +103,11 @@ USO
         resgatar  --nome Vovo [--para ENDEREÇO]      (herdeiro) resgata o saldo liberado
   (cobrar usa um subendereço novo a cada cobrança; --endereco-principal para usar o principal)
   krevo info      [--rpc URL]
-  krevo explorador [--porta 8080] [--rpc URL]        explorador de blocos no navegador (DAG ao vivo)
+  krevo explorador [--porta 8080] [--rpc URL] [--publico]   explorador de blocos no navegador (DAG ao vivo)
   krevo servidor-leve [--porta 8090] [--publico] [--rpc URL]   servidor para carteiras leves (não recebe chaves)
   krevo carteira-web [--porta 8091] [--publico]       app da carteira para navegador e celular (instalável)
+  krevo torneira --arquivo carteira-torneira.json [--porta 8092] [--valor 10] [--publico] [--proxy-confiavel]
+                                                      torneira de KRV de TESTE para quem opera uma testnet
   CARTEIRA LEVE: acrescente --leve URL_DO_SERVIDOR a carteira | nome | troca — funciona sem nó próprio
         carteira varredura local | delegada --leve URL    local = privado (padrão); delegada = o servidor vê o que você recebe
   krevo emissao   [--rede mainnet]
@@ -138,9 +142,10 @@ const OPT_ALIASES = {
   proposal: 'proposta', out: 'saida', path: 'caminho', heirs: 'herdeiros', after: 'apos', 'include-private': 'incluir-privado',
   sell: 'vender', 'btc-address': 'endereco-btc', 'btc-network': 'rede-btc', window: 'prazo', code: 'codigo',
   blocks: 'blocos', seconds: 'segundos', block: 'bloco',
+  public: 'publico', 'no-seeds': 'sem-sementes', 'trusted-proxy': 'proxy-confiavel',
   worker: 'trabalhador', 'web-port': 'porta-web', fee: 'taxa', 'min-payout': 'pagamento-minimo', interval: 'intervalo', state: 'estado',
 };
-const CMD_ALIASES = { node: 'no', mine: 'minerar', wallet: 'carteira', emission: 'emissao', explorer: 'explorador', pool: 'pool', swap: 'troca', 'btc-sim': 'btc-simulado', name: 'nome', names: 'nome', 'light-server': 'servidor-leve', 'web-wallet': 'carteira-web', escrow: 'garantia', reserves: 'reservas' };
+const CMD_ALIASES = { node: 'no', mine: 'minerar', wallet: 'carteira', emission: 'emissao', explorer: 'explorador', pool: 'pool', swap: 'troca', 'btc-sim': 'btc-simulado', name: 'nome', names: 'nome', 'light-server': 'servidor-leve', 'web-wallet': 'carteira-web', faucet: 'torneira', escrow: 'garantia', reserves: 'reservas' };
 const SUB_ALIASES = {
   create: 'criar', restore: 'restaurar', phrase: 'frase', address: 'endereco', balance: 'saldo', send: 'enviar',
   viewkey: 'chave-visualizacao', history: 'historico', prove: 'provar', 'check-proof': 'verificar-prova',
@@ -781,7 +786,7 @@ function askHidden(question) {
 async function resolvePassword() {
   if (str(args.senha) !== undefined) return;
   if (process.env.KREVO_SENHA) { args.senha = process.env.KREVO_SENHA; return; }
-  const file = path.resolve(args.arquivo ?? (cmd === 'pool' ? `carteira-pool-${params.name}.json` : `carteira-${params.name}.json`));
+  const file = path.resolve(args.arquivo ?? (cmd === 'pool' ? `carteira-pool-${params.name}.json` : cmd === 'torneira' ? `carteira-torneira-${params.name}.json` : `carteira-${params.name}.json`));
   try {
     if (!fs.existsSync(file) || !JSON.parse(fs.readFileSync(file, 'utf8')).seedEnc) return;
   } catch { return; }
@@ -790,14 +795,17 @@ async function resolvePassword() {
 }
 
 async function main() {
-  if (['carteira', 'garantia', 'reservas', 'nome', 'pool', 'troca'].includes(cmd) && !['criar', 'restaurar', 'verificar-prova'].includes(args._[1])) await resolvePassword();
+  if (['carteira', 'garantia', 'reservas', 'nome', 'pool', 'troca', 'torneira'].includes(cmd) && !['criar', 'restaurar', 'verificar-prova'].includes(args._[1])) await resolvePassword();
   switch (cmd) {
     case 'no':
     case 'node': {
-      const peers = [].concat(args.par ?? args.peer ?? []).filter((x) => x !== true);
+      // pares indicados + nós-semente da rede (seeds/<rede>.txt), salvo com --sem-sementes
+      const given = [].concat(args.par ?? args.peer ?? []).filter((x) => x !== true);
+      const peers = [...new Set([...given, ...(args['sem-sementes'] || args['no-seeds'] ? [] : seedsFor(params.name))])];
+      if (peers.length > given.length) log(`nós-semente de ${params.name}: ${peers.length - given.length}`);
       const node = new Node({
         params, datadir: args.dados ?? args.datadir ?? './dados', p2pPort: Number(args.porta ?? params.defaultP2pPort),
-        rpcPort: Number(args.rpcporta ?? params.defaultRpcPort), peers, log,
+        rpcPort: Number(args.rpcporta ?? params.defaultRpcPort), rpcHost: str(args.rpchost) ?? '127.0.0.1', peers, log,
       });
       await node.start();
       let last = 0;
@@ -1030,6 +1038,16 @@ ${s.address}`);
       await reservesCommand();
       break;
     }
+    case 'torneira': {
+      const file = path.resolve(args.arquivo ?? `carteira-torneira-${params.name}.json`);
+      if (!fs.existsSync(file)) throw new Error(`carteira da torneira não encontrada: ${file} (crie com: carteira criar --arquivo ${path.basename(file)} e mande KRV para o endereço transparente dela)`);
+      const w = WalletClass.load(file, params, walletUrl, str(args.senha));
+      await startFaucet({
+        wallet: w, params, port: Number(args.porta ?? 8092), host: args.publico ? '0.0.0.0' : '127.0.0.1',
+        amount: parseKRV(String(args.valor ?? '10')), trustProxy: !!args['proxy-confiavel'], log,
+      });
+      break;
+    }
     case 'troca': {
       const file = path.resolve(args.arquivo ?? `carteira-${params.name}.json`);
       if (!fs.existsSync(file)) throw new Error(`carteira não encontrada: ${file} (crie com: krevo carteira criar, ou indique --arquivo)`);
@@ -1078,7 +1096,7 @@ ${s.address}`);
       break;
     }
     case 'explorador': {
-      const ex = await startExplorer({ params, rpcUrl, port: Number(args.porta ?? 8080), log });
+      const ex = await startExplorer({ params, rpcUrl, port: Number(args.porta ?? 8080), host: args.publico ? '0.0.0.0' : '127.0.0.1', log });
       log('Explorador de blocos em ' + ex.url + '  (lendo o nó ' + rpcUrl + ')');
       break;
     }

@@ -1,0 +1,7 @@
+# Nós-semente da testnet pública do Krevo — um "host:porta" por linha (porta P2P padrão: 16210).
+#
+# Rodou um nó público e estável (veja docs/TESTNET.md)? Abra um pull request acrescentando o seu
+# endereço aqui. Os nós (JavaScript e Rust) conectam a estes endereços ao iniciar, quando não
+# recebem --par; depois descobrem os outros pares sozinhos (mensagens getaddr/addr).
+#
+# Ainda vazia: a testnet pública começa quando o primeiro voluntário subir um nó.

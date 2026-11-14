@@ -4,7 +4,7 @@
 //! de consenso, bit a bit, mesmo protocolo P2P e o mesmo RPC — carteiras, mineradores,
 //! servidor leve e explorador do projeto funcionam com ele sem mudanças.
 //!
-//!   krevod no      --rede devnet [--dados DIR] [--porta N] [--rpcporta N] [--par host:porta]…
+//!   krevod no      --rede devnet [--dados DIR] [--porta N] [--rpcporta N] [--par host:porta]… [--sem-sementes]
 //!   krevod replay  --rede devnet --arquivo DIR/devnet/blocos.dat
 //!   krevod provar  [--conferir]   (provador FCMP nativo para as carteiras: JSON na entrada e na saída)
 
@@ -91,7 +91,11 @@ fn main() {
             let port = args.get("porta").and_then(|x| x.parse().ok()).unwrap_or(params.default_p2p_port);
             let rpc_port = args.get("rpcporta").and_then(|x| x.parse().ok()).unwrap_or(params.default_rpc_port);
             let rpc_host = args.get("rpchost").unwrap_or("127.0.0.1").to_string();
-            let peers: Vec<String> = args.all("par").into_iter().filter(|x| x != "true").collect();
+            // pares indicados + nós-semente da rede (seeds/<rede>.txt), salvo com --sem-sementes
+            let mut peers: Vec<String> = args.all("par").into_iter().filter(|x| x != "true").collect();
+            if args.get("sem-sementes").is_none() && args.get("no-seeds").is_none() {
+                for s in params::seeds(params.name) { if !peers.contains(&s) { peers.push(s); } }
+            }
             let n = node::Node::new(params, Some(storage), port, rpc_host, rpc_port);
             let shared: node::Shared = std::sync::Arc::new((std::sync::Mutex::new(n), std::sync::Condvar::new()));
             let sh = shared.clone();

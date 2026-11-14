@@ -13,6 +13,21 @@ fraction of a cent, a **hard cap of 1 billion coins**, **zero premine**, **quant
 > ⚠️ **Reference implementation, not audited.** It is meant for testing, studying and evolving the
 > protocol on a test network. **Do not use it with real money.** See section 8 of the whitepaper.
 
+## Project status and how to help
+Krevo is published **as-is**: there is no company, no foundation, no funded team and no
+infrastructure behind it. The code, the tests and the documentation are complete enough for others
+to take it from here — the next steps need volunteers:
+
+- **Run the public testnet.** It is already defined in the code (`--network testnet`); it starts
+  when someone runs a node. Docker, a step-by-step guide and a faucet are ready:
+  **[docs/TESTNET.md](docs/TESTNET.md)**.
+- **Build what a long-running network needs** — above all, storage with state snapshots and pruning
+  in the Rust node (today a restart re-validates the whole chain).
+- **Review and audit** the cryptography and consensus: **[docs/SECURITY.md](docs/SECURITY.md)**.
+- **Wallets and apps** — mobile packaging, hardware wallets, quantum-safe addresses in the web app.
+
+How to contribute: **[CONTRIBUTING.md](CONTRIBUTING.md)**. License: MIT.
+
 ## Requirements
 Just a recent **Node.js (24.7 or newer, tested on 26)** — it ships OpenSSL 3.5, which provides the
 ML-DSA post-quantum signatures. Zero external dependencies (no npm packages) — all other cryptography,
@@ -23,7 +38,7 @@ and to rebuild the WebAssembly crypto core (`rustup target add wasm32-unknown-un
 
 ## Try it in one minute
 ```bash
-node --test test/            # 82 tests (one needs the Rust prover built): cryptography, full-chain membership proofs, GHOSTDAG, consensus, reorgs, wallet, BIP-39, memos, proofs, QR, subaddresses, multisig, inheritance, explorer, pool, quantum, Bitcoin, atomic swaps, names, light wallet (1 and 2 servers), browser crypto, the WebAssembly core, escrow, proof of reserves
+node --test test/            # 85 tests (one needs the Rust prover built): cryptography, full-chain membership proofs, GHOSTDAG, consensus, reorgs, wallet, BIP-39, memos, proofs, QR, subaddresses, multisig, inheritance, explorer, pool, quantum, Bitcoin, atomic swaps, names, light wallet (1 and 2 servers), browser crypto, the WebAssembly core, escrow, proof of reserves
 node scripts/web-demo.js     # the web/phone wallet with a local devnet, light server and faucet → http://127.0.0.1:8091
 node scripts/devnet.js       # starts 3 nodes + 2 miners and runs every transaction type (incl. quantum-safe)
 node scripts/swap-demo.js    # a full KRV ⇄ BTC atomic swap between two wallets, using only the CLI (simulated Bitcoin)
@@ -319,6 +334,8 @@ src/wallet/      keys, BIP-39 recovery phrase, transaction building, memos, paym
 src/util/        binary encoding, Bech32m addresses, QR code generator
 src/explorer/    web block explorer (live DAG, blocks, transactions, addresses, JSON API)
 rust/krevod/     the full node reimplemented in Rust (krevod) + cross-check scripts against the JavaScript node
+seeds/           seed nodes of each network (testnet volunteers add theirs by pull request)
+src/faucet/      faucet of test coins for testnet operators (krevo faucet)
 rust/krevo-wasm/ the wallet crypto core: krevod's code compiled to WebAssembly (build.mjs → src/crypto/krevo_core.wasm)
 src/pool/        mining pool (share protocol, vardiff, PPLNT accounting, batched payouts, stats page)
 src/light/       light wallet: public light server, client with compact scanning and acceptance proofs

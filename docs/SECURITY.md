@@ -34,7 +34,7 @@
 ## 3. Reproducing the checks
 
 ```bash
-node --test test/                                   # 82 tests (with the WebAssembly core)
+node --test test/                                   # 85 tests (with the WebAssembly core)
 KREVO_NO_WASM=1 node --test test/                   # the same, JavaScript fallback
 cd rust/krevod && cargo test                        # vectors vs. JavaScript, fuzzing, vault, CT unit tests
 cargo test ct_timing -- --ignored --nocapture       # dudect-style timing test, native (~1 min)

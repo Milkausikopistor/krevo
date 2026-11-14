@@ -1,0 +1,8 @@
+# Fora da imagem Docker: dados, carteiras, compilados, git
+.git
+**/target
+dados
+data
+carteira-*.json
+node_modules
+*.log
