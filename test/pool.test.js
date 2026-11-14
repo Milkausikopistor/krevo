@@ -10,6 +10,7 @@ import { Wallet } from '../src/wallet/wallet.js';
 import { PowState, hashMeetsTarget } from '../src/consensus/pow.js';
 import { fromHex } from '../src/util/bytes.js';
 import { startPool, splitReward, nextWeight, targetForWeight, weightOfTarget, parseDuration, MIN_WEIGHT } from '../src/pool/pool.js';
+import { freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -64,7 +65,7 @@ function client(port) {
 
 test('pool na rede: shares, blocos, divisão proporcional e pagamento (transparente e privado)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-pool-'));
-  const port = 19600 + Math.floor(Math.random() * 300);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

@@ -22,7 +22,7 @@ import { BTC_NETWORKS, p2wpkhAddress } from '../src/btc/address.js';
 import { pubFromPriv } from '../src/btc/ecdsa.js';
 import { SimBitcoin, startSimBitcoin } from '../src/btc/simbtc.js';
 import { createOffer, acceptOffer, importAcceptance, swapStep, decodeSwapCode, checkPairing, describeSwap } from '../src/wallet/swap.js';
-import { Clock, mine, matureTUtxos, tUtxos } from './helpers.js';
+import { Clock, mine, matureTUtxos, tUtxos, freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 const net = BTC_NETWORKS.regtest;
@@ -40,7 +40,7 @@ async function mineVia(url, address, n) {
 /** Ambiente: nó Krevo + Bitcoin simulado + carteiras de Alice e Bob (Alice com KRV). */
 async function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-swap-test-'));
-  const port = 19000 + Math.floor(Math.random() * 900);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

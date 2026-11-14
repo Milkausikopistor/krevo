@@ -32,7 +32,7 @@ The roadmap is in [docs/WHITEPAPER.md §9](docs/WHITEPAPER.md).
   Rebuild the WebAssembly core with `node rust/krevo-wasm/build.mjs` and commit
   `src/crypto/krevo_core.wasm`.
 - **Never log, persist or return secret keys.** The wallet holds signers, not keys.
-- **Tests for everything.** `node --test test/` (also with `KREVO_NO_WASM=1`) and `cargo test` must
+- **Tests for everything.** `node --test "test/*.test.js"` (also with `KREVO_NO_WASM=1`) and `cargo test` must
   pass; continuous integration runs them on every pull request.
 - Code comments and CLI messages are in Portuguese (with English aliases for commands and options);
   documentation is in English. Pull requests and issues are welcome in either language.
@@ -40,7 +40,7 @@ The roadmap is in [docs/WHITEPAPER.md §9](docs/WHITEPAPER.md).
 ## Getting started
 
 ```bash
-node --test test/                       # Node.js 24.7+
+node --test "test/*.test.js"           # Node.js 24.7+ (or: npm test)
 cd rust/krevod && cargo test            # stable Rust
 node scripts/devnet.js                  # a real local network (3 nodes, miners, wallets)
 node scripts/web-demo.js                # the web wallet against a local devnet + faucet

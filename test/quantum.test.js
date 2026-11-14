@@ -23,7 +23,7 @@ import { computeMass } from '../src/consensus/mass.js';
 import { decodeAddress } from '../src/address.js';
 import { parseOutpointKey, Transaction } from '../src/consensus/tx.js';
 import { toHex, fromHex } from '../src/util/bytes.js';
-import { Clock, mine, matureTUtxos, tUtxos, scanShielded, makeRing } from './helpers.js';
+import { Clock, mine, matureTUtxos, tUtxos, scanShielded, makeRing, freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 
@@ -196,7 +196,7 @@ test('catraca do pool privado: contabilidade pública e bloqueio de saída de mo
 
 test('carteira na rede: status, migração krv → krq, envio a partir do krq e restauração pela frase', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-quantum-test-'));
-  const port = 19000 + Math.floor(Math.random() * 900);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

@@ -15,6 +15,7 @@ import { buildPaymentURI, parsePaymentURI } from '../src/wallet/request.js';
 import { Transaction } from '../src/consensus/tx.js';
 import { multisigKey, encodeMultisigKey, MultisigGroup, proposePayment, checkProposalInputs, describeProposal,
   signProposal, mergeProposals, finalizeProposal, groupUtxos } from '../src/wallet/multisig.js';
+import { freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 
@@ -30,7 +31,7 @@ async function mineVia(url, address, n) {
 
 test('nó + RPC + carteira: minerar, sincronizar, enviar transparente e privado', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-node-test-'));
-  const port = 19000 + Math.floor(Math.random() * 900);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

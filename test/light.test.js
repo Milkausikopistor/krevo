@@ -23,6 +23,7 @@ import { makeShieldedOutput } from '../src/crypto/stealth.js';
 import { startLightServer } from '../src/light/server.js';
 import { LightWallet } from '../src/light/wallet.js';
 import { verifyAcceptanceProof } from '../src/light/verify.js';
+import { freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 
@@ -51,7 +52,7 @@ test('provas de Merkle: todos os tamanhos e posições; adulteração recusada',
 
 test('carteira leve: recebe, prova, gasta, não vaza chaves e gasta pouca banda; servidor mentiroso é pego', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-light-'));
-  const port = 19000 + Math.floor(Math.random() * 900);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

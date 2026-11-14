@@ -18,6 +18,7 @@ import { fromHex, toHex } from '../src/util/bytes.js';
 import { Keys } from '../src/wallet/keys.js';
 import { startLightServer } from '../src/light/server.js';
 import { LightWallet } from '../src/light/wallet.js';
+import { freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 
@@ -73,7 +74,7 @@ function liarProxy(upstream, plan) {
 
 test('dois servidores: o honesto desmascara o que o mentiroso esconde ou inventa', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-2srv-'));
-  const port = 19000 + Math.floor(Math.random() * 900);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

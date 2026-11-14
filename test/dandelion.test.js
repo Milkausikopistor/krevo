@@ -13,6 +13,7 @@ import { Block } from '../src/consensus/block.js';
 import { Transaction } from '../src/consensus/tx.js';
 import { solve } from '../src/node/solver.js';
 import { fromHex, toHex } from '../src/util/bytes.js';
+import { freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -28,7 +29,7 @@ async function mineVia(url, address, n) {
 
 test('dandelion: envios seguidos não reutilizam moedas que estão na haste', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-dand-'));
-  const port = 19100 + Math.floor(Math.random() * 300);
+  const port = await freePorts(4);
   const n0 = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   const n1 = new Node({ params, datadir: dir, p2pPort: port + 2, rpcPort: port + 3, peers: [`127.0.0.1:${port}`], log: () => {}, persist: false });
   await n0.start(); await n1.start();

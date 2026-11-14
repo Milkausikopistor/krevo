@@ -15,6 +15,7 @@ import { Keys } from '../src/wallet/keys.js';
 import { multisigKey, encodeMultisigKey } from '../src/wallet/multisig.js';
 import { EscrowContract, myRole, escrowStatus, escrowFund, escrowPropose, describeEscrowProposal, escrowSign, escrowReclaim } from '../src/wallet/escrow.js';
 import { proveReserves, verifyReserves, buildLiabilities, verifyLiability, parseAccountsCsv } from '../src/wallet/reserves.js';
+import { freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 
@@ -29,7 +30,7 @@ async function mineVia(url, address, n) {
 }
 async function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-er-'));
-  const port = 19000 + Math.floor(Math.random() * 900);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

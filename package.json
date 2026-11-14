@@ -5,7 +5,7 @@
   "type": "module",
   "bin": { "krevo": "src/cli.js" },
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test \"test/*.test.js\"",
     "devnet": "node scripts/devnet.js",
     "simulate": "node scripts/simulate.js",
     "emission": "node src/cli.js emissao --rede mainnet"

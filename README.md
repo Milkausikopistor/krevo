@@ -38,7 +38,7 @@ and to rebuild the WebAssembly crypto core (`rustup target add wasm32-unknown-un
 
 ## Try it in one minute
 ```bash
-node --test test/            # 85 tests (one needs the Rust prover built): cryptography, full-chain membership proofs, GHOSTDAG, consensus, reorgs, wallet, BIP-39, memos, proofs, QR, subaddresses, multisig, inheritance, explorer, pool, quantum, Bitcoin, atomic swaps, names, light wallet (1 and 2 servers), browser crypto, the WebAssembly core, escrow, proof of reserves
+node --test "test/*.test.js"   # (or: npm test) 85 tests (one needs the Rust prover built): cryptography, full-chain membership proofs, GHOSTDAG, consensus, reorgs, wallet, BIP-39, memos, proofs, QR, subaddresses, multisig, inheritance, explorer, pool, quantum, Bitcoin, atomic swaps, names, light wallet (1 and 2 servers), browser crypto, the WebAssembly core, escrow, proof of reserves
 node scripts/web-demo.js     # the web/phone wallet with a local devnet, light server and faucet → http://127.0.0.1:8091
 node scripts/devnet.js       # starts 3 nodes + 2 miners and runs every transaction type (incl. quantum-safe)
 node scripts/swap-demo.js    # a full KRV ⇄ BTC atomic swap between two wallets, using only the CLI (simulated Bitcoin)

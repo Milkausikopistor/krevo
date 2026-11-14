@@ -22,6 +22,7 @@ import { pubFromPriv } from '../src/btc/ecdsa.js';
 import { btcHtlc, spendBtcHtlc } from '../src/btc/htlc.js';
 import { BitcoinCore } from '../src/btc/core.js';
 import { createOffer, acceptOffer, importAcceptance, swapStep } from '../src/wallet/swap.js';
+import { freePorts } from './helpers.js';
 
 const BITCOIND = process.env.BITCOIND;
 const skip = BITCOIND ? false : 'defina BITCOIND=caminho/do/bitcoind para validar contra o Bitcoin Core real';
@@ -30,7 +31,7 @@ const sats = (btc) => Math.round(Number(btc) * 1e8);
 
 async function startCore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-core-'));
-  const port = 28000 + Math.floor(Math.random() * 900) * 2;
+  const port = await freePorts(4);
   const pass = randomBytes(12).toString('hex');
   const proc = spawn(BITCOIND, ['-regtest', `-datadir=${dir}`, '-listen=0', '-dnsseed=0', '-connect=0', '-server=1',
     '-rpcbind=127.0.0.1', '-rpcallowip=127.0.0.1', `-rpcport=${port}`, '-rpcuser=krevo', `-rpcpassword=${pass}`,
@@ -153,7 +154,7 @@ test('troca atômica completa com o Bitcoin Core real (vender KRV e vender BTC)'
   const c = await startCore();
   const params = getParams('simnet');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-core-swap-'));
-  const port = 19000 + Math.floor(Math.random() * 900);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

@@ -16,7 +16,7 @@ import {
   checkName, isValidName, normalizeName, nameFee, encodeNameRecord, parseNameRecord, nameCommitHash, nameCommitLock,
   commitWitnessPrefix, parseCommitWitness,
 } from '../src/consensus/names.js';
-import { Clock, mine, matureTUtxos } from './helpers.js';
+import { Clock, mine, matureTUtxos, freePorts } from './helpers.js';
 import { Node } from '../src/node/node.js';
 import { Wallet } from '../src/wallet/wallet.js';
 import { rpc } from '../src/node/rpcclient.js';
@@ -193,7 +193,7 @@ async function mineVia(url, address, n) {
 
 test('carteira na rede: registrar @padaria, pagar para @padaria, alterar, transferir para krq, renovar, liberar', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-names-'));
-  const port = 19000 + Math.floor(Math.random() * 900);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

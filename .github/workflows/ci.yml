@@ -23,9 +23,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: Testes com o núcleo WebAssembly
-        run: node --test test/
+        run: node --test "test/*.test.js"
       - name: Testes sem WebAssembly (plano B em JavaScript)
-        run: node --test test/
+        run: node --test "test/*.test.js"
         env:
           KREVO_NO_WASM: "1"
 

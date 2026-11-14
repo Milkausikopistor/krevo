@@ -12,6 +12,7 @@ import { Block } from '../src/consensus/block.js';
 import { solve } from '../src/node/solver.js';
 import { fromHex, toHex } from '../src/util/bytes.js';
 import { startExplorer, dagSvg } from '../src/explorer/server.js';
+import { freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 
@@ -26,7 +27,7 @@ async function mineVia(url, address, n) {
 
 test('explorador: painel, bloco, transação, endereço, busca e API', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-explorer-'));
-  const port = 19500 + Math.floor(Math.random() * 400);
+  const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;

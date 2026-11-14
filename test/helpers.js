@@ -65,3 +65,25 @@ export function makeRing(c, real) {
   assert.equal(ring.length, p.ringSize, 'iscas suficientes');
   return ring.sort(() => Math.random() - 0.5);
 }
+
+/**
+ * Bloco de k portas consecutivas LIVRES (nó P2P, RPC, servidores…). Os testes rodam em paralelo:
+ * sortear numa faixa estreita fazia dois arquivos pegarem a mesma porta (EADDRINUSE). Faixa
+ * 20000–32000 (fora das portas efêmeras do Linux, 32768+, e do Windows, 49152+), conferida ligando
+ * cada porta antes de devolver.
+ */
+export async function freePorts(k = 2) {
+  const { createServer } = await import('node:net');
+  const listenOn = (port) => new Promise((ok, fail) => { const s = createServer(); s.once('error', fail); s.listen(port, () => ok(s)); });
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const base = 20000 + Math.floor(Math.random() * (12000 - k));
+    const servers = [];
+    try {
+      for (let i = 0; i < k; i++) servers.push(await listenOn(base + i));
+      return base;
+    } catch { /* ocupada: tenta outro bloco */ } finally {
+      await Promise.all(servers.map((s) => new Promise((r) => s.close(() => r()))));
+    }
+  }
+  throw new Error('nenhum bloco de portas livre');
+}
