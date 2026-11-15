@@ -68,16 +68,16 @@ test('wallet file with a password: only the essentials in the clear; the rest en
   try {
     const file = path.join(dir, 'w.json');
     const w = Wallet.create(file, params, '', { password: 'strong password' });
-    w.data.sOwned = [{ index: 7, outpoint: 'ab'.repeat(32) + ':0', amount: '123456', mask: '99', k: 'abc', P: '02' + '11'.repeat(32), sub: 0 }];
-    w.data.txSecrets = { ['cd'.repeat(32)]: 'ffee' };
+    w.data.sOwned = [{ index: 7, outpoint: 'ab'.repeat(32) + ':0', amount: '987654321098', mask: '99', k: 'abc', P: '02' + '11'.repeat(32), sub: 0 }];
+    w.data.txSecrets = { ['cd'.repeat(32)]: 'feedfacecafebeef' };
     w.save();
     const raw = fs.readFileSync(file, 'utf8');
     const disk = JSON.parse(raw);
     assert.deepEqual(Object.keys(disk).sort(), ['hasPassphrase', 'mnemonicEnc', 'network', 'sealed', 'seedEnc', 'version']);
-    for (const s of ['123456', 'ab'.repeat(32), 'cd'.repeat(32), 'ffee']) assert.ok(!raw.includes(s), `visible in the file: ${s}`);
+    for (const s of ['987654321098', 'ab'.repeat(32), 'cd'.repeat(32), 'feedfacecafebeef']) assert.ok(!raw.includes(s), `visible in the file: ${s}`);
     const w2 = Wallet.load(file, params, '', 'strong password');
-    assert.equal(w2.data.sOwned[0].amount, '123456');
-    assert.equal(w2.data.txSecrets['cd'.repeat(32)], 'ffee');
+    assert.equal(w2.data.sOwned[0].amount, '987654321098');
+    assert.equal(w2.data.txSecrets['cd'.repeat(32)], 'feedfacecafebeef');
     assert.equal(w2.mnemonic, null, 'the phrase is not decrypted on opening');
     assert.equal(w2.revealMnemonic('strong password').split(' ').length, 24);
     assert.throws(() => Wallet.load(file, params, '', 'wrong'), /wrong password/);

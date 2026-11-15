@@ -93,6 +93,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false" # no build-record artifact (it is not a release file)
         with:
           context: .
           push: true
@@ -107,10 +109,16 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      # only the release files: the krevod packages and the source package
       - uses: actions/download-artifact@v4
         with:
+          pattern: krevod-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: source
+          path: dist
       - name: Checksums and release notes
         run: |
           cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt && cd ..
