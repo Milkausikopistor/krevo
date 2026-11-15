@@ -18,6 +18,7 @@ import { solve } from '../src/node/solver.js';
 import { fromHex, toHex } from '../src/util/bytes.js';
 import { Keys } from '../src/wallet/keys.js';
 import { Transaction } from '../src/consensus/tx.js';
+import { PQ_WITNESS_SIZE } from '../src/consensus/pqlock.js';
 import { generateMnemonic } from '../src/wallet/bip39.js';
 import { startLightServer } from '../src/light/server.js';
 import { freePorts } from './helpers.js';
@@ -51,6 +52,7 @@ test('web wallet (browser pieces): restores, scans, proves, reads the memo and s
     await mineVia(url, alice.tAddress, 30);
     await mineVia(url, miner.sAddress(params), 40);
     const p = await alice.send({ to: web.sAddress, amount: 3n * COIN, from: 'transparent', memo: 'café ☕' });
+    await alice.send({ to: web.tAddress, amount: 2n * COIN, from: 'transparent' }); // classic coins, migrated to krq at the end
     await mineVia(url, miner.tAddress(params), params.lightProofDepth + 6);
     assert.equal((await rpc(url, 'gettransactionstatus', { txid: p.txid })).status, 'accepted');
 
@@ -73,6 +75,22 @@ test('web wallet (browser pieces): restores, scans, proves, reads the memo and s
     const raw3 = Transaction.deserialize(fromHex((await rpc(url, 'gettransaction', { txid: r3.sent.txid })).tx));
     assert.ok(raw3.sIn.length && raw3.sIn.every((i) => i.ring.length === 0), 'no ring');
     console.log(`    sync in the "browser": ${r1.syncMs} ms, ${r1.sync.bytes} B; FCMP spend without threads: proof in ${(r3.sent.proveMs / 1000).toFixed(1)} s, ${r3.sent.anonymitySet} outputs`);
+
+    // quantum-safe address (krq) with just the browser pieces: ML-DSA comes from the WebAssembly core
+    if (!r1.pq) return; // KREVO_NO_WASM: the browser has no other ML-DSA (the app hides krq in that case)
+    assert.equal(r1.qAddress, web.qAddress, 'the phrase produces the same krq address in the browser');
+    const r4 = JSON.parse((await client('', '', '', 'migrate')).stdout);
+    assert.equal(r4.migrated.txids.length, 1, 'the classic coins moved to krq');
+    assert.ok(BigInt(r4.migrated.moved) > 2n * COIN - 100_000n, `moved ${r4.migrated.moved} grains`);
+    await mineVia(url, miner.tAddress(params), params.lightProofDepth + 3);
+    assert.equal((await rpc(url, 'gettransactionstatus', { txid: r4.migrated.txids[0] })).status, 'accepted');
+    // spending from krq: the browser signs with Schnorr + ML-DSA
+    const r5 = JSON.parse((await client(alice.tAddress, String(COIN / 2n), 'transparent')).stdout);
+    await mineVia(url, miner.tAddress(params), 1);
+    assert.equal((await rpc(url, 'gettransactionstatus', { txid: r5.sent.txid })).status, 'accepted', 'the network accepted the hybrid signature made in the browser');
+    const raw5 = Transaction.deserialize(fromHex((await rpc(url, 'gettransaction', { txid: r5.sent.txid })).tx));
+    assert.ok(raw5.tIn.length && raw5.tIn.every((i) => i.sig.length === PQ_WITNESS_SIZE), 'hybrid Schnorr + ML-DSA witness');
+    console.log(`    krq in the "browser": ${r4.migrated.moved} grains migrated, then spent with a ${PQ_WITNESS_SIZE}-byte hybrid witness`);
   } finally {
     await ls.close();
     await node.stop();

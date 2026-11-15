@@ -11,6 +11,7 @@ import { generateMnemonic, normalizeMnemonic, mnemonicToEntropy } from '../walle
 import { encodeQR, qrToSvg } from '../util/qrcode.js';
 import { decodeAddress } from '../address.js';
 import { buildPaymentURI, parsePaymentURI } from '../wallet/request.js';
+import { pqAvailable } from '../crypto/pq.js';
 import { t, lang, setLang, locale, localNumber, LANGUAGES } from './i18n.js';
 
 const $app = document.getElementById('app');
@@ -231,6 +232,8 @@ async function syncNow() {
     S.syncing = false;
     paintStatus();
     if (S.w && S.tab === 'home') paintHome();
+    const q = S.w && S.tab === 'settings' && document.getElementById('qcard');
+    if (q) q.innerHTML = quantumCard(S.w);
   }
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
@@ -300,17 +303,22 @@ function paintHome() {
 function paintReceive() {
   const w = S.w;
   const view = document.getElementById('view');
-  const addr = S.recvKind === 's' ? w.sAddress : w.tAddress;
+  const pq = pqAvailable();
+  if (S.recvKind === 'q' && !pq) S.recvKind = 's';
+  const addr = { s: w.sAddress, t: w.tAddress, q: pq ? w.qAddress : w.tAddress }[S.recvKind];
+  const kinds = [['s', 'Private'], ['t', 'Transparent'], ...(pq ? [['q', 'Quantum-safe']] : [])];
   view.innerHTML = `<div class="card">
       <div class="seg" role="group" aria-label="${esc(t('Address type'))}">
-        <button data-k="s" aria-pressed="${S.recvKind === 's'}">${t('Private')}</button><button data-k="t" aria-pressed="${S.recvKind === 't'}">${t('Transparent')}</button></div>
+        ${kinds.map(([k, l]) => `<button data-k="${k}" aria-pressed="${S.recvKind === k}">${t(l)}</button>`).join('')}</div>
       <div class="qr" id="qr"></div>
       <div class="addr mono" id="addr">${esc(addr)}</div>
       <div class="row mt"><button class="btn" id="copy">${t('Copy')}</button>${navigator.share ? `<button class="btn" id="share">${t('Share')}</button>` : ''}</div>
       <label for="ramt">${t('Request an amount (optional)')}</label><input id="ramt" inputmode="decimal" placeholder="${esc(localNumber('0.00'))}" autocomplete="off">
-      <p class="hint">${S.recvKind === 's'
-    ? t('Private: the amount and the recipient stay hidden on the network. Each payment goes to a one-time address.')
-    : t('Transparent: amounts are visible on the network, as in Bitcoin. Prefer private.')}</p></div>`;
+      <p class="hint">${t({
+    s: 'Private: the amount and the recipient stay hidden on the network. Each payment goes to a one-time address.',
+    t: 'Transparent: amounts are visible on the network, as in Bitcoin. Prefer private.',
+    q: 'Quantum-safe (krq): every spend needs two signatures at once — Schnorr and ML-DSA (NIST FIPS 204) — so even a quantum computer cannot steal these coins. Amounts are visible, as in transparent.',
+  }[S.recvKind])}</p></div>`;
   let current = addr;
   const paint = () => {
     let uri = addr;
@@ -455,14 +463,28 @@ function paintSettings() {
       <p class="hint">${delegated
     ? t('By the server: saves battery, but the server receives your view key and sees what you receive (it still cannot spend).')
     : t('On this device (recommended): the server receives no key and does not know which payments are yours.')}</p></div>
+    <h2>${t('Quantum protection')}</h2><div class="card" id="qcard">${quantumCard(w)}</div>
     <h2>${t('Security')}</h2><div class="card stack">
       <button class="btn" id="phrase">${t('Show recovery phrase')}</button>
       <button class="btn" id="viewkey">${t('Copy view key (read-only)')}</button>
       <button class="btn danger" id="forget">${t('Remove the wallet from this device')}</button></div>
     <h2>${t('About')}</h2><div class="card small muted">
       <p>${t('Network <b>{network}</b>. Light wallet: scanning happens here, and every amount received only counts after a proof (Merkle + {depth} blocks with proof of work on top).', { network: esc(w.network), depth: esc(String(w.proofDepth)) })}</p>
-      <p>${t('Quantum-safe addresses (krq) and multisig are available in the command-line wallet.')}</p></div>`;
+      <p>${t('Multisig is available in the command-line wallet.')}</p></div>`;
   bindLang();
+  // (delegated: the card is repainted after each sync)
+  on('#qcard', 'click', (ev) => ev.target.closest('#migrate') && modal(`<h1>${t('Move to the quantum-safe address?')}</h1>
+      <p>${t('Your mature classic transparent coins (krv) move to your krq address, and from now on the change of transparent payments goes there too. Private coins are not touched. The fee is a fraction of a cent.')}</p>
+      <div class="stack mt"><button class="btn primary" id="yes">${t('Move')}</button><button class="btn" id="no">${t('Cancel')}</button></div>`, (m, close) => {
+    m.querySelector('#no').addEventListener('click', close);
+    m.querySelector('#yes').addEventListener('click', (e) => busy(e.currentTarget, t('Moving…'), async () => {
+      const r = await w.migrateQuantum();
+      close();
+      toast(r.txs.length ? t('Moved {amount} to the quantum-safe address in {n} transaction(s).', { amount: krv(r.moved), n: r.txs.length })
+        : t('Quantum mode is on. There were no mature classic coins to move yet.'));
+      syncNow();
+    }));
+  }));
   on('#save-srv', 'click', (e) => busy(e.currentTarget, t('Checking…'), async () => {
     const urls = [$('#srv').value, $('#srv2').value].map((u) => u.trim().replace(/\/+$/, '')).filter(Boolean);
     if (!urls.length) throw new Error(t('enter the light server'));
@@ -489,6 +511,18 @@ function paintSettings() {
     m.querySelector('#no').addEventListener('click', close);
     m.querySelector('#yes').addEventListener('click', () => { w.forget(); close(); clearInterval(S.timer); S.w = null; render(); toast(t('Wallet removed from this device')); });
   }));
+}
+
+/** Quantum protection: transparent coins split by address type, and the button that moves them to krq. */
+function quantumCard(w) {
+  if (!pqAvailable()) return `<p class="hint">${t('Quantum-safe addresses need the WebAssembly core, which did not load in this browser.')}</p>`;
+  const sum = (k) => (w.tUtxos ?? []).filter((u) => u.kind === k).reduce((a, u) => a + BigInt(u.amount), 0n);
+  const classic = sum('t'), quantum = sum('q');
+  return `<div class="kv"><span>${t('Quantum protection')}</span><span class="chip ${w.quantum ? 'good' : ''}">${t(w.quantum ? 'on' : 'off')}</span></div>
+    <div class="kv"><span>${t('Classic transparent (krv)')}</span><span>${esc(krv(classic))}</span></div>
+    <div class="kv"><span>${t('Quantum-safe (krq)')}</span><span>${esc(krv(quantum))}</span></div>
+    <p class="hint">${t('A large enough quantum computer could forge the classic signatures (Schnorr) of transparent coins. Coins on your krq address also need an ML-DSA signature, which it cannot forge. Private coins stay in the private pool.')}</p>
+    <div class="stack mt"><button class="btn" id="migrate"${!w.quantum || classic > 0n ? '' : ' disabled'}>${t('Move transparent coins to krq')}</button></div>`;
 }
 
 function askPassword(title, then) {

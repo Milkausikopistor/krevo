@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+**Web wallet**
+- Translations: every screen goes through a small dictionary (`src/web/i18n.js`), with Portuguese as
+  the first translation. The language follows the browser and can be changed in Settings; amounts
+  and dates use the language's format, and ambiguous amounts ("1,000" / "1.000") are refused. (#7)
+- Quantum-safe addresses (krq): receive on your krq address, see how much is protected, and move
+  your classic transparent coins to krq with one tap; spends from krq are signed in the browser with
+  Schnorr + ML-DSA (WebAssembly core). (#4)
+
 ## [0.1.0] — 2026-11-15
 First public release: a complete reference implementation, ready to download and run on a local
 devnet or the (volunteer-run) public testnet. **Not audited — do not use it with real money.**

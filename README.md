@@ -45,7 +45,7 @@ to take it from here — the next steps need volunteers:
 - **Build what a long-running network needs** — above all, storage with state snapshots and pruning
   in the Rust node (today a restart re-validates the whole chain).
 - **Review and audit** the cryptography and consensus: **[docs/SECURITY.md](docs/SECURITY.md)**.
-- **Wallets and apps** — mobile packaging, hardware wallets, quantum-safe addresses in the web app.
+- **Wallets and apps** — mobile packaging, hardware wallets, more translations of the web wallet.
 
 How to contribute: **[CONTRIBUTING.md](CONTRIBUTING.md)**. License: MIT.
 
@@ -609,8 +609,11 @@ Or serve just the app (`node src/cli.js web-wallet --port 8091`) and point it to
   app's own origin (plus `'wasm-unsafe-eval'`, which lets the page compile its own WebAssembly core —
   JavaScript `eval` stays blocked). On phones, install it from an **HTTPS** origin (browsers only allow installing and
   WebCrypto there; over plain HTTP on a local network it still works, with a slower key derivation).
-* ML-DSA now runs in the browser (through the Rust core), but the app's screens don't offer
-  quantum-safe (`krq`) addresses or multisig yet — use the command-line wallet for those.
+* **Quantum-safe addresses (krq):** the app shows your `krq` address, how much is protected, and moves
+  your classic transparent coins there with one tap; ML-DSA runs in the browser through the Rust core.
+  Multisig is still command-line only.
+* **Languages:** English and Portuguese (it follows the browser; change it in Settings). Adding one is
+  a single dictionary in `src/web/i18n.js`.
 
 ## Human-readable names (@name)
 Pay `@bakery` instead of `krs1qyp3h27…`. Names live **on the Krevo network itself**: there is no
