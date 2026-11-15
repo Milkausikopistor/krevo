@@ -869,8 +869,13 @@ producing red blocks — the natural path for growth.
 * **Bounded state:** storage mass makes growing the UTXO set expensive.
 * **State commitment (MuHash3072):** each header commits to the full state. This lets a new node
   download a *snapshot* of the state and verify it against the headers — without downloading the
-  history (pruned sync, not yet implemented; see roadmap). The Rust node already uses the same check
-  for its own local snapshots: the UTXO set it reloads must re-commit to the chain's MuHash.
+  history. The Rust node does this with `--fast-sync`: it validates every header (proof of work,
+  GHOSTDAG, difficulty), takes the UTXO set at a block about one merge depth below the tip from its
+  peers, checks it against that block's MuHash commitment and the coins minted against the headers,
+  and fully validates everything after it. The Security Fund balance and the private-pool total are
+  not committed in headers: peers must agree on them and the following blocks re-check them. A
+  logarithmic pruning proof (Kaspa-style, which would also spare the old headers) is on the roadmap;
+  it needs per-level parents in the header format.
 * **More blocks per second:** the DAG scales by increasing the block rate (the 32 blocks/s simulation
   produced no red blocks), and k adjusts automatically.
 * **The cost of privacy:** private outputs can never be removed from the set (nobody knows which were
@@ -969,8 +974,9 @@ money** until the items below are resolved:
 5. **Pruning is only a local policy, and there is no consensus finality.** The Rust node restarts from
    a state snapshot and, with `--prune`, drops the history below a *pruning point* and refuses any
    chain that forks off below it — a local finality, as on a pruned Bitcoin node; the JavaScript node
-   keeps every block and revalidates everything on restart. Still missing: pruning proofs and snapshot
-   sync, so that new nodes do not need archival peers.
+   keeps every block and revalidates everything on restart. New Rust nodes can fast-sync (all headers,
+   then a verified recent state), but the headers still come from archival nodes: a logarithmic
+   pruning proof is missing.
 6. **The Security Fund has a known weak spot:** a miner can arrange fees "off-chain" with users to
    avoid the half that goes to the fund. With tiny fees the incentive is small, but it exists.
 7. **Quantum computing** threatens secp256k1 in the long term (as it does Bitcoin, Kaspa and Monero).
@@ -1022,8 +1028,9 @@ money** until the items below are resolved:
    are done; the snapshot is still rewritten whole), parallel validation in the rusty-kaspa style. The JavaScript version remains the executable specification and the source of
    test vectors.
 2. **Independent audits** of the cryptography and consensus.
-3. **Pruning proofs + snapshot sync** (new nodes that start from a verified state instead of the whole
-   history; pruning with constant disk usage already exists in the Rust node as a local policy).
+3. **Pruning proofs** (a logarithmic subset of headers, Kaspa-style, so that new nodes need neither
+   the old blocks nor the old headers; needs per-level parents in the header format). Local pruning
+   and fast sync from all headers plus a verified state already exist in the Rust node.
 4. **Wallet ecosystem:** BIP-39 recovery phrases (section 4.5) and trustless light wallets (section 4.14)
    are done, and the light wallet runs in browsers and on phones as an installable app; next come native
    mobile packaging, hardware wallet apps (Ledger/Trezor)

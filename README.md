@@ -42,8 +42,9 @@ to take it from here — the next steps need volunteers:
 - **Run the public testnet.** It is already defined in the code (`--network testnet`); it starts
   when someone runs a node. Docker, a step-by-step guide and a faucet are ready:
   **[docs/TESTNET.md](docs/TESTNET.md)**.
-- **Build what a long-running network needs** — the Rust node now restarts from state snapshots and
-  can prune its history; still missing are snapshot sync for new nodes (with pruning proofs) and an
+- **Build what a long-running network needs** — the Rust node now restarts from state snapshots, can
+  prune its history, and new nodes can fast-sync from the headers plus a verified recent state; still
+  missing are a logarithmic pruning proof (so that new nodes need no old headers either) and an
   on-disk database in place of the in-memory block index.
 - **Review and audit** the cryptography and consensus: **[docs/SECURITY.md](docs/SECURITY.md)**.
 - **Wallets and apps** — mobile packaging, hardware wallets, more translations of the web wallet.
@@ -110,6 +111,7 @@ node src/cli.js wallet send --to krsdev1… --amount 2 --from private --rpc http
 node src/cli.js light-server --rpc http://127.0.0.1:16321      # and the explorer: explorer --rpc …
 ./target/release/krevod replay --network devnet --file ./data/devnet/blocks.dat   # re-validate a block file
 ./target/release/krevod node --network testnet --prune     # keep only recent history (bounded disk and memory)
+./target/release/krevod node --network testnet --fast-sync # a new node: headers + a verified recent state, not every block
 ```
 * **What is inside:** its own Montgomery arithmetic for both curves of the secp256k1/secq256k1 cycle,
   GHOSTDAG and the difficulty adjustment, KrevoHash, emission, mass, the UTXO state with MuHash
@@ -135,7 +137,10 @@ node src/cli.js light-server --rpc http://127.0.0.1:16321      # and the explore
     through the Rust node's RPC, a light wallet through a light server on top of it — and both nodes
     ending with exactly the same state (760 blocks, nothing rejected);
   * restart from its own block file and then from its state snapshot, the JavaScript node re-validating
-    a file written by the Rust node, and the block explorer running on top of it (`vectors/restart.mjs`).
+    a file written by the Rust node, and the block explorer running on top of it (`vectors/restart.mjs`);
+  * fast sync over real TCP connections (`vectors/fastsync.mjs`): a new node with `--fast-sync` and
+    one syncing normally both reach exactly the state of a 2,700-block chain, then the fast-synced
+    node mines blocks the others accept.
 * **Speed** (same machine): re-validating the 1,051-block devnet chain takes 1.8 s (JavaScript: 11 s);
   the 28 test chains 4.0 s (21.6 s); verifying one full-chain membership proof ~0.13–0.19 s (~1 s).
   Restarting from the state snapshot: 0.11 s for 3,000 blocks against 1.9 s of full re-validation
@@ -153,10 +158,25 @@ node src/cli.js light-server --rpc http://127.0.0.1:16321      # and the explore
     validation window), drops the block bodies below it and forgets everything further down, then
     compacts `blocks.dat`. Tests check, block by block through parallel blocks, reorganizations, red
     blocks and snapshot reloads, that a pruned engine validates every new block exactly like an
-    archival one. Trade-offs, as with a pruned Bitcoin node: it **cannot serve old blocks** (new nodes
-    still sync from archival peers — snapshot sync is future work), it **never follows a chain that
-    forks off below its pruning point** (local finality), and its folder is no longer readable by the
+    archival one. Trade-offs, as with a pruned Bitcoin node: it **cannot serve old blocks or headers**
+    (it still serves recent blocks and the state for fast sync), it **never follows a chain that forks
+    off below its pruning point** (local finality), and its folder is no longer readable by the
     JavaScript node.
+  * **Fast sync for new nodes (`--fast-sync`, `src/fastsync.rs`).** An empty node downloads and
+    validates **every header** since the genesis — proof of work, GHOSTDAG, difficulty, timestamps —
+    keeping only a recent window in memory, so it knows the heaviest chain with the security of all
+    its work. It then asks its peers for the **state at a sync point** about one merge depth below the
+    tip: the UTXO set, which must re-commit to the MuHash commitment in that block's header, and the
+    coins minted so far, which must match what the headers imply. From there it works as a node pruned
+    at that point and fully validates every later block. Two totals are not in any header (the
+    Security Fund balance and the private-pool total): every peer asked must send the same ones, or
+    the node falls back to a normal sync, and the following blocks check them again. Headers come
+    from archival Rust nodes; the state from any Rust node, pruned or not; with JavaScript peers only,
+    or a chain still short, the node simply syncs normally. Not done: a Kaspa-style logarithmic proof
+    (it needs per-level parents in the header format, a consensus change), which would let new nodes
+    skip the old headers too. Tests (`src/fastsync_test.rs`) run real nodes over in-memory links: the
+    new node ends with exactly the archival node's state and template, then follows the chain both
+    ways; forged states, lying totals, invalid headers, silent peers and restarts are covered.
   * Size: the snapshot holds ~1.6 KB per kept block (mostly each chain block's MuHash state), the same
     data the engine keeps in memory; pruning bounds both.
 * **Native prover for wallets:** `krevod prove` computes the two circuit Bulletproofs of each

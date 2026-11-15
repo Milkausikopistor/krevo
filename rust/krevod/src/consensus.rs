@@ -116,6 +116,50 @@ pub fn parse_coinbase_payload(buf: &[u8]) -> Res<(u64, Vec<u8>, Vec<u8>)> {
     Ok((bs, md, extra))
 }
 
+/// Header rules (everything that needs no block body): PoW, parents, GHOSTDAG, difficulty, timestamp
+/// and merge depth, against the DAG data in `store`/`headers`. Shared by the engine and by the
+/// header-first sync of new nodes (fastsync.rs).
+pub fn check_header(p: &Params, store: &DagStore, headers: &HashMap<Hash, Header>, ghostdag: &Ghostdag, pow_limit_bits: u32, h: &Header) -> Result<GhostdagData, String> {
+    let parents = &h.parents;
+    if h.version != 1 { return Err("unknown header version".into()); }
+    if parents.is_empty() || parents.len() > p.max_parents { return Err("invalid number of parents".into()); }
+    for i in 1..parents.len() { if parents[i - 1] >= parents[i] { return Err("parents out of order or repeated".into()); } }
+    let target = compact_to_target(h.bits)?;
+    if target > compact_to_target(pow_limit_bits)? { return Err("target above the limit".into()); }
+    if !check_pow(h) { return Err("insufficient proof of work".into()); }
+    for i in 0..parents.len() {
+        for j in 0..parents.len() {
+            if i != j && store.is_ancestor(&parents[i], &parents[j]) { return Err("parents do not form an antichain".into()); }
+        }
+    }
+    let gd = ghostdag.run(store, parents);
+    if gd.mergeset_blues.len() + gd.mergeset_reds.len() > p.mergeset_size_limit { return Err("mergeset too large".into()); }
+    if h.blue_score != gd.blue_score || h.blue_work != gd.blue_work || h.daa_score != gd.daa_score { return Err("header GHOSTDAG data does not match".into()); }
+    if h.bits != required_bits(p, store, headers, &gd, pow_limit_bits) { return Err("incorrect difficulty".into()); }
+    if h.timestamp < past_median_time(p, store, headers, &gd) { return Err("timestamp before the past median time".into()); }
+    for x in &gd.mergeset_asc {
+        if gd.blue_score.saturating_sub(store.gd[x].blue_score) > p.merge_depth { return Err("block too old in the mergeset (merge depth limit)".into()); }
+    }
+    Ok(gd)
+}
+
+/// How far below a pruning point the DAG data must be kept (see `Consensus::prune`).
+pub fn prune_margin(p: &Params) -> u64 {
+    p.merge_depth + p.daa_window_size as u64 + p.past_median_time_window as u64 + 4 * p.ghostdag_k as u64 + 100
+}
+
+/// Coins minted up to and including the acceptance of a block with this GHOSTDAG data, from the
+/// selected parent's total — the same loop as `compute_acceptance`, which needs only header data.
+pub fn minted_after(p: &Params, store: &DagStore, genesis: &Hash, sp_minted: u64, gd: &GhostdagData) -> u64 {
+    let sp = gd.selected_parent.expect("not the genesis");
+    let mut minted = sp_minted;
+    for x in std::iter::once(&sp).chain(gd.mergeset_asc.iter()) {
+        if x == genesis { continue; }
+        minted += capped_subsidy(store.gd[x].daa_score, minted, p);
+    }
+    minted
+}
+
 pub fn build_genesis(p: &Params) -> Block {
     let mut cb = Transaction::new();
     cb.payload = coinbase_payload(0, &[], p.genesis_message.as_bytes());
@@ -231,30 +275,11 @@ impl Consensus {
     }
 
     fn validate_header(&self, block: &Block) -> Result<GhostdagData, String> {
-        let p = &self.params;
-        let h = &block.header;
-        let parents = &h.parents;
-        if h.version != 1 { return Err("unknown header version".into()); }
-        if parents.is_empty() || parents.len() > p.max_parents { return Err("invalid number of parents".into()); }
-        for i in 1..parents.len() { if parents[i - 1] >= parents[i] { return Err("parents out of order or repeated".into()); } }
-        let target = compact_to_target(h.bits)?;
-        if target > compact_to_target(self.pow_limit_bits)? { return Err("target above the limit".into()); }
-        if !check_pow(h) { return Err("insufficient proof of work".into()); }
-        for i in 0..parents.len() {
-            for j in 0..parents.len() {
-                if i != j && self.store.is_ancestor(&parents[i], &parents[j]) { return Err("parents do not form an antichain".into()); }
-            }
-        }
-        let gd = self.ghostdag.run(&self.store, parents);
-        if gd.mergeset_blues.len() + gd.mergeset_reds.len() > p.mergeset_size_limit { return Err("mergeset too large".into()); }
-        if h.blue_score != gd.blue_score || h.blue_work != gd.blue_work || h.daa_score != gd.daa_score { return Err("header GHOSTDAG data does not match".into()); }
-        if h.bits != required_bits(p, &self.store, &self.headers, &gd, self.pow_limit_bits) { return Err("incorrect difficulty".into()); }
-        if h.timestamp < past_median_time(p, &self.store, &self.headers, &gd) { return Err("timestamp before the past median time".into()); }
-        for x in &gd.mergeset_asc {
-            if gd.blue_score.saturating_sub(self.store.gd[x].blue_score) > p.merge_depth { return Err("block too old in the mergeset (merge depth limit)".into()); }
-        }
-        Ok(gd)
+        check_header(&self.params, &self.store, &self.headers, &self.ghostdag, self.pow_limit_bits, &block.header)
     }
+
+    /// Context-free checks of a block body (coinbase form, Merkle root, mass…); returns the miner data.
+    pub fn check_body(&self, block: &Block) -> Result<Vec<u8>, String> { self.validate_body(block) }
 
     fn validate_body(&self, block: &Block) -> Result<Vec<u8>, String> {
         let p = &self.params;
@@ -560,10 +585,7 @@ impl Consensus {
     // ----------------------------------------------------------- pruning
     /// How far below the pruning point the DAG data must be kept: the difficulty and median-time
     /// windows, the merge depth and the GHOSTDAG walks of new blocks never reach further down.
-    pub fn prune_margin(&self) -> u64 {
-        let p = &self.params;
-        p.merge_depth + p.daa_window_size as u64 + p.past_median_time_window as u64 + 4 * p.ghostdag_k as u64 + 100
-    }
+    pub fn prune_margin(&self) -> u64 { prune_margin(&self.params) }
     /// Smallest pruning depth accepted (blue score between the virtual and the pruning point): twice
     /// the deepest window a new block's validation looks into, so it never reaches the pruning point
     /// (the margin below it is a further cushion, e.g. for side blocks that fork off near it).

@@ -35,8 +35,8 @@ fn w_big(w: &mut Writer, x: &BigUint) { w.varbytes(&x.to_bytes_le()); }
 fn r_big(r: &mut Reader) -> Res<BigUint> { Ok(BigUint::from_bytes_le(r.varbytes(4096)?)) }
 fn w_hashes(w: &mut Writer, v: &[Hash]) { w.varint(v.len() as u64); for h in v { w.bytes(h); } }
 fn r_hashes(r: &mut Reader) -> Res<Vec<Hash>> { let n = r.varint(BIG)?; (0..n).map(|_| r.arr()).collect() }
-fn w_op(w: &mut Writer, k: &Op) { w.bytes(&k.0).u32(k.1); }
-fn r_op(r: &mut Reader) -> Res<Op> { Ok((r.arr()?, r.u32()?)) }
+pub(crate) fn w_op(w: &mut Writer, k: &Op) { w.bytes(&k.0).u32(k.1); }
+pub(crate) fn r_op(r: &mut Reader) -> Res<Op> { Ok((r.arr()?, r.u32()?)) }
 
 fn w_gd(w: &mut Writer, g: &GhostdagData) {
     match g.selected_parent { Some(h) => { w.u8(1).bytes(&h); } None => { w.u8(0); } }
@@ -64,10 +64,10 @@ fn r_gd(r: &mut Reader) -> Res<GhostdagData> {
     Ok(GhostdagData { selected_parent, mergeset_blues, mergeset_reds, blues_anticone_sizes, blue_score, blue_work, daa_score, mergeset_asc })
 }
 
-fn w_t(w: &mut Writer, e: &TEntry) { w.u64(e.amount).varbytes(&e.lock).u64(e.daa).u8(e.coinbase as u8); }
-fn r_t(r: &mut Reader) -> Res<TEntry> { Ok(TEntry { amount: r.u64()?, lock: r.varbytes(BIG)?.to_vec(), daa: r.u64()?, coinbase: r.u8()? == 1 }) }
-fn w_s(w: &mut Writer, e: &SEntry) { w.bytes(&e.p).bytes(&e.c).bytes(&e.enc_amount).u8(e.view_tag).bytes(&e.r).u32(e.j).u64(e.daa).u8(e.coinbase as u8); }
-fn r_s(r: &mut Reader) -> Res<SEntry> {
+pub(crate) fn w_t(w: &mut Writer, e: &TEntry) { w.u64(e.amount).varbytes(&e.lock).u64(e.daa).u8(e.coinbase as u8); }
+pub(crate) fn r_t(r: &mut Reader) -> Res<TEntry> { Ok(TEntry { amount: r.u64()?, lock: r.varbytes(BIG)?.to_vec(), daa: r.u64()?, coinbase: r.u8()? == 1 }) }
+pub(crate) fn w_s(w: &mut Writer, e: &SEntry) { w.bytes(&e.p).bytes(&e.c).bytes(&e.enc_amount).u8(e.view_tag).bytes(&e.r).u32(e.j).u64(e.daa).u8(e.coinbase as u8); }
+pub(crate) fn r_s(r: &mut Reader) -> Res<SEntry> {
     Ok(SEntry { p: r.arr()?, c: r.arr()?, enc_amount: r.arr()?, view_tag: r.u8()?, r: r.arr()?, j: r.u32()?, daa: r.u64()?, coinbase: r.u8()? == 1 })
 }
 

@@ -68,7 +68,9 @@ Requirements: Node.js **24.7+** (tested on 26); for the Rust node, a stable Rust
 node src/cli.js node --network testnet --datadir ./data
 cd rust/krevod && cargo build --release && ./target/release/krevod node --network testnet --datadir ./data
 #   add --prune to keep only the last ~3 hours of history (bounded disk and memory; such a node cannot
-#   serve old blocks to new nodes, so the network also needs some archival nodes — the default)
+#   serve old blocks or headers to new nodes, so the network also needs some archival nodes — the default)
+#   add --fast-sync to a NEW node: it validates every header, then starts from a verified recent state
+#   instead of re-validating every block (needs at least one archival Rust node among its peers)
 
 # the rest talks to the node's RPC (default http://127.0.0.1:16211)
 node src/cli.js wallet create --network testnet                       # asks for nothing; add --password to encrypt
@@ -97,10 +99,11 @@ These are the main obstacles to a **long-running** testnet. They are good projec
    every 6,000 new blocks or a quarter of what it keeps) and validates only the newer blocks; with
    `--prune` it also keeps disk and memory bounded (see the Rust node section of the README for the
    trade-offs). The **JavaScript node** still keeps every block and re-validates the whole chain at
-   start-up (~230 blocks/s, so each day of chain adds about an hour to its restart). Still needed:
-   snapshot sync for new nodes with pruning proofs, so that they do not depend on archival peers
-   (whitepaper §9, item 3), and a key-value database (the snapshot is rewritten whole, ~1.6 KB per
-   kept block).
+   start-up (~230 blocks/s, so each day of chain adds about an hour to its restart). A **new** Rust
+   node can `--fast-sync`: every header (small) from an archival Rust node, then a verified recent
+   state from its peers. Still needed: a logarithmic pruning proof, so that new nodes need no old
+   headers and no archival peer at all (whitepaper §9, item 3), and a key-value database (the
+   snapshot is rewritten whole, ~1.6 KB per kept block).
 2. **Memory.** The block index lives in RAM in both nodes and grows with the chain (a pruned Rust node
    keeps only its recent window).
 3. **Peer management.** Discovery is a plain `getaddr/addr` exchange plus the seed list; there is no

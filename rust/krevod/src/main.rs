@@ -6,6 +6,7 @@
 //!
 //!   krevod node    --network devnet [--datadir DIR] [--port N] [--rpcport N] [--peer host:port]… [--no-seeds]
 //!                  [--prune [--prune-depth N]]   (keep only recent history: see Consensus::prune)
+//!                  [--fast-sync]   (a new node starts from headers + a verified recent state: see fastsync.rs)
 //!   krevod replay  --network devnet --file DIR/devnet/blocks.dat
 //!   krevod prove   [--check]   (native FCMP prover for the wallets: JSON in and out)
 //!
@@ -18,6 +19,7 @@ pub mod crypto;
 pub mod ct;
 pub mod curve;
 pub mod dag;
+pub mod fastsync;
 pub mod fcmp;
 pub mod field;
 pub mod hash;
@@ -42,6 +44,8 @@ mod ct_timing_test;
 mod hostile_test;
 #[cfg(test)]
 mod snapshot_test;
+#[cfg(test)]
+mod fastsync_test;
 #[cfg(test)]
 mod vectors_test;
 
@@ -115,6 +119,7 @@ fn main() {
                 n.prune_depth = Some(d);
                 node::log(&format!("pruning on: history more than {d} blue score old is dropped (this node cannot serve it to new nodes)"));
             }
+            n.fast_sync = args.get("fast-sync").is_some(); // (only used when the data folder is empty)
             let shared: node::Shared = std::sync::Arc::new((std::sync::Mutex::new(n), std::sync::Condvar::new()));
             let sh = shared.clone();
             std::thread::spawn(move || {
@@ -132,7 +137,7 @@ fn main() {
             if let Err(e) = node::run(shared, peers) { eprintln!("error: {e}"); std::process::exit(1); }
         }
         _ => {
-            eprintln!("krevod — Krevo node in Rust\n  krevod node --network devnet [--datadir DIR] [--port N] [--rpcport N] [--peer host:port] [--no-seeds] [--prune [--prune-depth N]]\n  krevod replay --network devnet --file blocks.dat\n  krevod prove [--check]");
+            eprintln!("krevod — Krevo node in Rust\n  krevod node --network devnet [--datadir DIR] [--port N] [--rpcport N] [--peer host:port] [--no-seeds] [--prune [--prune-depth N]] [--fast-sync]\n  krevod replay --network devnet --file blocks.dat\n  krevod prove [--check]");
         }
     }
 }

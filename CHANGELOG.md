@@ -13,6 +13,12 @@
 - Tests: a pruned engine validates every block exactly like an archival one (parallel blocks,
   reorganizations, red blocks, shielded coinbases, repeated snapshot reloads); restart from disk,
   crash between the snapshot and the compaction, damaged and tampered snapshots, local finality.
+- Fast sync for new nodes: `krevod node --fast-sync` validates every header since the genesis (keeping
+  only a recent window in memory), then takes the state at a block about one merge depth below the
+  tip from its peers — UTXO set checked against that block's MuHash commitment, coins minted checked
+  against the headers, the other totals required to be identical from every peer asked — and fully
+  validates every block after it. New P2P messages `getheaders`/`headers` and `getstate`/`state`
+  (the JavaScript node ignores them; with no Rust peer able to help, the node syncs normally). (#8)
 
 **Web wallet**
 - Translations: every screen goes through a small dictionary (`src/web/i18n.js`), with Portuguese as

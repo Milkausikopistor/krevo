@@ -240,6 +240,10 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
             Ok(json!({
                 "network": n.params.name, "genesis": to_hex(&n.c.genesis_hash), "blocks": n.c.blocks_count + 1, "tips": n.c.tips.len(),
                 "pruned": n.c.pruning_point.is_some(), "pruningPoint": n.c.pruning_point.map(|h| to_hex(&h)),
+                "fastSync": n.fast.as_ref().map(|f| json!({
+                    "stage": if f.stage == crate::fastsync::Stage::Headers { "headers" } else { "state" },
+                    "headers": f.hc.count, "headerBlueScore": f.hc.best_score(),
+                })),
                 "virtual": { "blueScore": v.gd.blue_score, "daaScore": v.gd.daa_score, "selectedParent": v.gd.selected_parent.map(|h| to_hex(&h)), "parents": v.parents.len() },
                 "difficulty": work, "target": target.to_str_radix(16), "blocksPerSecond": (bps * 100.0).round() / 100.0,
                 "hashrate": (work * bps).round(), "mempool": n.mempool.txs.len(), "peers": n.peers.values().filter(|x| x.ready).count(),

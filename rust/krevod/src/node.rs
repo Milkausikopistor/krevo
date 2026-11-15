@@ -9,6 +9,8 @@ use crate::block::Block;
 use crate::bytes::{from_hex, from_hex32, to_hex};
 use crate::consensus::{AddResult, Consensus};
 use crate::dag::Hash;
+use crate::block::Header;
+use crate::fastsync::*;
 use crate::mempool::{now_ms, Mempool};
 use crate::params::Params;
 use crate::storage::BlockFile;
@@ -61,6 +63,12 @@ pub struct Node {
     /// Pruning depth (blue score) when the node prunes (`--prune`); None = archival node.
     pub prune_depth: Option<u64>,
     snap_blocks: u64,
+    /// `--fast-sync`: an empty node starts from headers + a verified state (fastsync.rs)
+    pub fast_sync: bool,
+    /// the fast sync in progress (None: normal operation)
+    pub fast: Option<FastSync>,
+    /// blue score per `headers` reply this node serves
+    pub header_page: u64,
 }
 
 pub type Shared = Arc<(Mutex<Node>, Condvar)>;
@@ -99,8 +107,202 @@ impl Node {
             requested: HashMap::new(), stem_peer: None, stem_since: 0, embargo: HashMap::new(),
             nonce: to_hex(&seed[..8]), port, rpc_host, rpc_port, max_peers: 24, template_cache: HashMap::new(),
             rng: u64::from_le_bytes(seed[8..].try_into().unwrap()) | 1, to_connect: vec![],
-            prune_depth: None, snap_blocks: 0,
+            prune_depth: None, snap_blocks: 0, fast_sync: false, fast: None, header_page: HEADER_PAGE,
         }
+    }
+
+    // ------------------------------------------------------------ fast sync
+    /// Starts a fast sync if it was asked for and this node has nothing yet.
+    pub fn start_fast_sync(&mut self) {
+        if !self.fast_sync || self.c.blocks_count > 0 || self.fast.is_some() { return; }
+        log("fast sync: downloading and validating the headers first, then the state at a recent block");
+        self.fast = Some(FastSync::new(self.params.clone(), now_ms()));
+        self.fast_request_headers();
+    }
+
+    /// Asks the next peer for headers (the one that announced the most work and has not failed).
+    fn fast_request_headers(&mut self) {
+        let Some(f) = &self.fast else { return };
+        if f.stage != Stage::Headers || f.header_peer.is_some() { return; }
+        let ready: Vec<u64> = self.peers.values().filter(|p| p.ready).map(|p| p.id).collect();
+        let pick = ready.iter().filter(|id| !f.tried.contains(id)).max_by_key(|id| (f.peer_scores.get(id).copied().unwrap_or(0), u64::MAX - **id)).copied();
+        match pick {
+            Some(peer) => {
+                let from = f.next_from;
+                let f = self.fast.as_mut().unwrap();
+                f.header_peer = Some(peer);
+                f.last_progress = now_ms();
+                self.send(peer, &json!({ "t": "getheaders", "from": from }));
+            }
+            None if !ready.is_empty() => self.fast_fallback("no peer answered with the headers from the genesis — they come from archival Rust nodes"),
+            None => {} // (no peers yet)
+        }
+    }
+
+    fn fast_on_headers(&mut self, peer: u64, m: &Value) {
+        let now = now_ms();
+        let Some(f) = &mut self.fast else { return };
+        if f.stage != Stage::Headers || f.header_peer != Some(peer) || m["from"].as_u64() != Some(f.next_from) { return; }
+        f.header_peer = None;
+        if let Some(e) = m["error"].as_str() {
+            log(&format!("fast sync: peer {peer} does not serve these headers ({e}); asking another"));
+            f.tried.insert(peer);
+            return self.fast_request_headers();
+        }
+        let mut bad = None;
+        let list = m["headers"].as_array().map(|v| v.as_slice()).unwrap_or(&[]);
+        // every page of an honest chain holds headers (blue score never jumps a whole page): an empty
+        // one ends the download, so a peer cannot keep us asking for pages forever
+        let last_page = list.is_empty();
+        for x in list {
+            let Some(h) = x.as_str().and_then(|s| from_hex(s).ok()).and_then(|b| Header::deserialize(&b).ok()) else { bad = Some("malformed header".to_string()); break };
+            if let HeaderResult::Invalid(e) = f.hc.add(h, now) { bad = Some(e); break; }
+        }
+        if let Some(e) = bad {
+            f.tried.insert(peer);
+            log(&format!("fast sync: invalid header from peer {peer}: {e}"));
+            self.misbehave(peer, 50, &e);
+            return self.fast_request_headers();
+        }
+        let window = f.hc.window();
+        f.hc.prune(window);
+        f.last_progress = now;
+        match m["next"].as_u64() {
+            Some(next) if next > f.next_from && !last_page => {
+                f.next_from = next;
+                if f.hc.count % 50_000 < 2_500 { log(&format!("fast sync: {} headers validated (blue score {})", f.hc.count, f.hc.best_score())); }
+                self.fast_request_headers();
+            }
+            _ => self.fast_headers_done(),
+        }
+    }
+
+    fn fast_headers_done(&mut self) {
+        let Some(f) = &mut self.fast else { return };
+        let Some(s) = f.hc.sync_point() else { return self.fast_fallback("the chain is still short: a normal sync is quick") };
+        let s_bs = f.hc.store.gd[&s].blue_score;
+        log(&format!("fast sync: {} headers validated, tip at blue score {}; asking for the state at {} (blue score {s_bs})",
+            f.hc.count, f.hc.best_score(), &to_hex(&s)[..12]));
+        f.stage = Stage::State;
+        f.target = Some(s);
+        f.state_since = now_ms();
+        let mut cand: Vec<u64> = self.peers.values().filter(|p| p.ready).map(|p| p.id).collect();
+        cand.sort_by_key(|id| std::cmp::Reverse(f.peer_scores.get(id).copied().unwrap_or(0)));
+        cand.truncate(STATE_PEERS);
+        f.asked = cand.iter().copied().collect();
+        for id in cand { self.send(id, &json!({ "t": "getstate", "hash": to_hex(&s) })); }
+        self.fast_decide(false);
+    }
+
+    fn fast_on_state(&mut self, peer: u64, m: &Value) -> Result<(), String> {
+        let Some(f) = &mut self.fast else { return Ok(()) };
+        if f.stage != Stage::State || !f.asked.contains(&peer) || f.answered.contains(&peer) { return Ok(()); }
+        if m["hash"].as_str() != f.target.map(|h| to_hex(&h)).as_deref() { return Ok(()); }
+        if let Some(e) = m["error"].as_str() {
+            if e == "not-chain" { f.disagreement = true; } // (it has that block, but not as a valid chain block)
+            f.answered.insert(peer);
+            self.fast_decide(false);
+            return Ok(());
+        }
+        let digest = from_hex32(m["digest"].as_str().unwrap_or(""))?;
+        let data = from_hex(m["data"].as_str().unwrap_or(""))?;
+        let got = f.add_part(peer, m["part"].as_u64().unwrap_or(u64::MAX), m["parts"].as_u64().unwrap_or(0), digest, data);
+        let buf = match got {
+            Ok(Some(b)) => b,
+            Ok(None) => return Ok(()),
+            Err(e) => { f.answered.insert(peer); f.parts.remove(&peer); self.fast_decide(false); return Err(e); }
+        };
+        f.answered.insert(peer);
+        match decode_state(&f.hc, &buf) {
+            Ok(st) => f.verified.push((peer, digest, st)),
+            Err(e) => { log(&format!("fast sync: state from peer {peer} refused: {e}")); self.misbehave(peer, 100, &e); }
+        }
+        self.fast_decide(false);
+        Ok(())
+    }
+
+    /// Once every peer asked has answered (or on timeout): all the states received must be the same.
+    fn fast_decide(&mut self, timeout: bool) {
+        let Some(f) = &mut self.fast else { return };
+        if f.stage != Stage::State { return; }
+        let pending = f.asked.iter().filter(|id| !f.answered.contains(id) && self.peers.contains_key(id)).count();
+        if pending > 0 && !timeout { return; }
+        let digests: HashSet<[u8; 32]> = f.verified.iter().map(|x| x.1).collect();
+        if f.disagreement || digests.len() > 1 { return self.fast_fallback("peers disagree about the state at the sync point"); }
+        if f.verified.is_empty() { return self.fast_fallback("no peer could provide the state at the sync point"); }
+        let n = f.verified.len();
+        let mut f = self.fast.take().unwrap();
+        let (_, _, st) = f.verified.swap_remove(0);
+        let body = st.block.clone();
+        match build_engine(&f.hc, st) {
+            Ok(c) => {
+                self.c = c;
+                self.orphans.clear(); self.waiting.clear(); self.future.clear(); self.requested.clear();
+                if let Some(storage) = &self.storage { if let Err(e) = storage.append(&body) { log(&format!("error writing block: {e}")); } }
+                let s = self.c.pruning_point.unwrap();
+                log(&format!("fast sync: state at {} verified ({n} peer(s) in agreement{}); now downloading and validating the blocks after it",
+                    &to_hex(&s)[..12], if n < 2 { " — the Security Fund and private-pool totals were not cross-checked" } else { "" }));
+                self.checkpoint(true);
+                let from = self.c.prune_cutoff;
+                let ids: Vec<u64> = self.peers.values().filter(|p| p.ready).map(|p| p.id).collect();
+                for id in ids { self.send(id, &json!({ "t": "getdag", "from": from })); }
+            }
+            Err(e) => { self.fast = Some(f); self.fast_fallback(&format!("could not start from the state: {e}")); }
+        }
+    }
+
+    /// Gives up the fast sync: a normal sync from the genesis (always possible, just slower).
+    fn fast_fallback(&mut self, why: &str) {
+        if self.fast.take().is_none() { return; }
+        log(&format!("fast sync abandoned ({why}): syncing normally from the genesis"));
+        let ids: Vec<u64> = self.peers.values().filter(|p| p.ready).map(|p| p.id).collect();
+        for id in ids { self.send(id, &json!({ "t": "getdag", "from": 0 })); }
+    }
+
+    /// Timeouts of the fast sync (from the maintenance tick).
+    pub fn fast_tick(&mut self, now: u64) {
+        let Some(f) = &mut self.fast else { return };
+        match f.stage {
+            Stage::Headers => {
+                if let Some(p) = f.header_peer {
+                    if !self.peers.contains_key(&p) || now.saturating_sub(f.last_progress) > HEADER_TIMEOUT_MS { f.tried.insert(p); f.header_peer = None; }
+                }
+                self.fast_request_headers();
+            }
+            Stage::State => { if now.saturating_sub(f.state_since) > STATE_TIMEOUT_MS { self.fast_decide(true); } else { self.fast_decide(false); } }
+        }
+    }
+
+    /// Serves `getheaders`: the headers with blue score in [from, from + page), parents first.
+    fn serve_headers(&mut self, peer: u64, m: &Value) {
+        let from = m["from"].as_u64().unwrap_or(0);
+        if self.fast.is_some() { return self.send(peer, &json!({ "t": "headers", "from": from, "error": "syncing" })); }
+        if self.c.pruning_point.is_some() && from < self.c.prune_cutoff { return self.send(peer, &json!({ "t": "headers", "from": from, "error": "pruned" })); }
+        let end = from.saturating_add(self.header_page.max(1));
+        let mut top = 0;
+        let mut hs: Vec<(&num_bigint::BigUint, &Hash)> = vec![];
+        for (h, g) in &self.c.store.gd {
+            top = top.max(g.blue_score);
+            if g.blue_score >= from && g.blue_score < end { hs.push((&g.blue_work, h)); }
+        }
+        hs.sort(); // (blue work grows from parent to child: parents first)
+        let list: Vec<String> = hs.iter().filter_map(|(_, h)| self.c.headers.get(*h)).map(|x| to_hex(&x.serialize(false))).collect();
+        let next = if top >= end { json!(end) } else { Value::Null };
+        self.send(peer, &json!({ "t": "headers", "from": from, "headers": list, "next": next }));
+    }
+
+    /// Serves `getstate`: the state at a chain block, in parts.
+    fn serve_state(&mut self, peer: u64, m: &Value) -> Result<(), String> {
+        let hx = m["hash"].as_str().unwrap_or("").to_string();
+        let h = from_hex32(&hx)?;
+        let res = if self.fast.is_some() { Err("syncing") } else { encode_state(&mut self.c, &h) };
+        let buf = match res { Ok(b) => b, Err(e) => { self.send(peer, &json!({ "t": "state", "hash": hx, "error": e })); return Ok(()); } };
+        let digest = to_hex(&state_digest(&buf));
+        let chunks: Vec<&[u8]> = buf.chunks(STATE_CHUNK).collect();
+        for (i, ch) in chunks.iter().enumerate() {
+            self.send(peer, &json!({ "t": "state", "hash": hx, "part": i, "parts": chunks.len(), "digest": digest, "data": to_hex(ch) }));
+        }
+        Ok(())
     }
     fn rand(&mut self) -> f64 {
         self.rng ^= self.rng << 13; self.rng ^= self.rng >> 7; self.rng ^= self.rng << 17;
@@ -324,10 +526,20 @@ impl Node {
                 let dir = if p.outbound { "outbound" } else { "inbound" };
                 if !self.known.contains(&listen) { self.known.push(listen.clone()); }
                 log(&format!("peer connected: {listen} ({dir})"));
-                let from = self.c.virt().gd.blue_score.saturating_sub(300);
-                self.send(peer, &json!({ "t": "getdag", "from": from }));
+                if let Some(f) = &mut self.fast {
+                    // fast sync: headers first (no blocks until the state at the sync point is in)
+                    f.peer_scores.insert(peer, m["blueScore"].as_u64().unwrap_or(0));
+                    self.fast_request_headers();
+                } else {
+                    let from = self.c.virt().gd.blue_score.saturating_sub(300);
+                    self.send(peer, &json!({ "t": "getdag", "from": from }));
+                }
                 self.send(peer, &json!({ "t": "getaddr" }));
             }
+            "getheaders" => self.serve_headers(peer, m),
+            "headers" => self.fast_on_headers(peer, m),
+            "getstate" => self.serve_state(peer, m)?,
+            "state" => self.fast_on_state(peer, m)?,
             "getdag" => {
                 let from = m["from"].as_u64().unwrap_or(0);
                 let mut hashes: Vec<(u64, String)> = self.c.store.gd.iter()
@@ -339,6 +551,7 @@ impl Node {
                     self.send(peer, &json!({ "t": "inv", "blocks": v }));
                 }
             }
+            "inv" | "block" | "tx" if self.fast.is_some() => {} // (during a fast sync: nothing to build on yet)
             "inv" => {
                 if let Some(b) = m["blocks"].as_array() {
                     let hs: Vec<String> = b.iter().filter_map(|x| x.as_str().map(String::from)).collect();
@@ -467,6 +680,7 @@ impl Node {
             }
             self.requested.retain(|_, t| now - *t <= 60_000);
             self.checkpoint(false);
+            self.fast_tick(now);
         }
     }
 }
@@ -485,6 +699,25 @@ impl Node {
         self.next_peer += 1;
         self.peers.insert(id, Peer { id, addr: "127.0.0.1:1".into(), outbound: false, ready: true, score: 0, listen: None, tx, sock: a });
         id
+    }
+
+    /// A peer reached through an in-memory channel (tests of the protocol between nodes): returns its
+    /// id on this node and the frames this node sends to it; the hello goes out first, as in `attach`.
+    pub fn test_link(&mut self) -> (u64, std::sync::mpsc::Receiver<Vec<u8>>) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let a = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (b, _) = l.accept().unwrap();
+        std::mem::forget(b);
+        let (tx, rx) = channel();
+        let id = self.next_peer;
+        self.next_peer += 1;
+        self.peers.insert(id, Peer { id, addr: format!("127.0.0.1:{}", 30_000 + id), outbound: true, ready: false, score: 0, listen: None, tx, sock: a });
+        let hello = json!({
+            "t": "hello", "version": PROTOCOL_VERSION, "network": self.params.name, "genesis": to_hex(&self.c.genesis_hash),
+            "nonce": self.nonce, "listen": self.port, "blueScore": self.c.virt().gd.blue_score,
+        });
+        self.send(id, &hello);
+        (id, rx)
     }
 }
 
@@ -560,6 +793,7 @@ pub fn run(shared: Shared, seeds: Vec<String>) -> std::io::Result<()> {
     let (port, rpc_host, rpc_port, name, genesis) = {
         let mut n = lock_node(&shared.0);
         n.load().map_err(std::io::Error::other)?;
+        n.start_fast_sync();
         for s in &seeds { if !n.known.contains(s) { n.known.push(s.clone()); } }
         (n.port, n.rpc_host.clone(), n.rpc_port, n.params.name, to_hex(&n.c.genesis_hash))
     };

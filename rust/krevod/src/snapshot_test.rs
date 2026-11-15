@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 /// simnet with small windows, so that pruning starts after a few hundred blocks
-fn params() -> Params {
+pub(crate) fn params() -> Params {
     let mut p = get_params("simnet").unwrap();
     p.merge_depth = 30;
     p.daa_window_size = 30;
@@ -41,7 +41,7 @@ impl Rng {
 
 fn point(tag: &str, part: &str) -> [u8; 33] { hash_to_point_secp(H::new("test/miner").s(tag).s(part)).to_bytes() }
 /// the three kinds of miner: transparent key, shielded address (private coinbase), lock hash
-fn miners() -> Vec<Vec<u8>> {
+pub(crate) fn miners() -> Vec<Vec<u8>> {
     let mut t = vec![0x00]; t.extend(point("alice", "t"));
     let mut s = vec![0x01]; s.extend(point("bob", "a")); s.extend(point("bob", "b"));
     let mut m = vec![0x03]; m.extend(H::new("test/miner").s("carol").d32());
@@ -52,7 +52,7 @@ fn solve(mut b: Block) -> Block {
     while !check_pow(&b.header) { b.header.nonce += 1; }
     Block::new(b.header, b.txs)
 }
-fn mine(c: &mut Consensus, md: &[u8], extra: &str, ts: u64) -> Block {
+pub(crate) fn mine(c: &mut Consensus, md: &[u8], extra: &str, ts: u64) -> Block {
     solve(c.build_template(md, vec![], extra.as_bytes(), ts).expect("template"))
 }
 
@@ -68,7 +68,7 @@ fn res(r: &AddResult) -> String {
 
 /// Everything a node's behaviour depends on, as seen from the virtual: the state summary, the tips
 /// and the exact block template it would hand to a miner.
-fn fingerprint(c: &mut Consensus) -> Value {
+pub(crate) fn fingerprint(c: &mut Consensus) -> Value {
     let probe = c.build_template(&miners()[2], vec![], b"probe", 0).expect("template");
     let mut s = crate::replay::summary(c);
     let o = s.as_object_mut().unwrap();
@@ -117,7 +117,7 @@ fn same_tx_block(re: &Consensus, c: &Consensus) {
 }
 
 /// Snapshot → bytes → engine: the reloaded engine re-encodes to exactly the same bytes.
-fn reload(c: &Consensus) -> Consensus {
+pub(crate) fn reload(c: &Consensus) -> Consensus {
     let bytes = snapshot::encode(c);
     let l = snapshot::decode(&c.params, &bytes).expect("decode");
     let blocks: Vec<Block> = c.order.iter().filter_map(|h| c.blocks.get(h).map(|b| (**b).clone())).collect();
@@ -138,10 +138,10 @@ fn reload(c: &Consensus) -> Consensus {
     c2
 }
 
-struct Sim { a: Consensus, p: Consensus, side: Consensus, ts: u64, rng: Rng, miners: Vec<Vec<u8>>, n: u64, prunes: usize, forgotten: usize, reorgs: usize }
+pub(crate) struct Sim { pub a: Consensus, pub p: Consensus, side: Consensus, pub ts: u64, rng: Rng, miners: Vec<Vec<u8>>, n: u64, prunes: usize, forgotten: usize, reorgs: usize }
 
 impl Sim {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         let p = params();
         let ts = p.genesis_timestamp + 100;
         Sim { a: Consensus::new(p.clone()), p: Consensus::new(p.clone()), side: Consensus::new(p), ts, rng: Rng(seed), miners: miners(), n: 0, prunes: 0, forgotten: 0, reorgs: 0 }
@@ -156,7 +156,7 @@ impl Sim {
         if side_too { assert!(matches!(self.side.add_block(b.clone(), u64::MAX / 2, false), AddResult::Accepted { .. } | AddResult::Known(_))); }
     }
     /// one step: a block, a few parallel blocks, or a private branch released later
-    fn step(&mut self) {
+    pub(crate) fn step(&mut self) {
         let r = self.rng.below(100);
         if r < 60 {
             let (md, ts) = (self.miner(), self.tick());
@@ -280,7 +280,7 @@ fn pruned_node_keeps_finality() {
 }
 
 // ------------------------------------------------------------------------------- node on disk
-fn tmpdir(tag: &str) -> PathBuf {
+pub(crate) fn tmpdir(tag: &str) -> PathBuf {
     let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let d = std::env::temp_dir().join(format!("krevo-test-{tag}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
