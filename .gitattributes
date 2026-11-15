@@ -1,4 +1,4 @@
-# Finais de linha LF em todos os sistemas (o projeto roda em Linux, macOS e Windows)
+# LF line endings on every system (the project runs on Linux, macOS and Windows)
 * text=auto eol=lf
 *.wasm binary
 *.png binary

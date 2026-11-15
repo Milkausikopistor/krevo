@@ -1,5 +1,5 @@
-// Blocos e cabeçalhos. Cada bloco aponta para VÁRIOS pais (todas as pontas do
-// DAG que o minerador conhecia) — é isso que torna o BlockDAG paralelo.
+// Blocks and headers. Each block points to SEVERAL parents (every DAG tip the miner knew
+// about) — that is what makes the BlockDAG parallel.
 
 import { H } from '../crypto/hash.js';
 import { Writer, Reader, toHex, ZERO32, bytesToBigBE, bigToBytesBE } from '../util/bytes.js';
@@ -50,13 +50,13 @@ export class Header {
     h.daaScore = Number(r.u64());
     h.blueScore = Number(r.u64());
     const bw = r.varbytes(64);
-    if (bw.length && bw[0] === 0) throw new Error('blueWork não canônico');
+    if (bw.length && bw[0] === 0) throw new Error('non-canonical blueWork');
     h.blueWork = bytesToBigBE(bw);
     return h;
   }
   get hash() { return H('block/hash', this.serialize()); }
   get hashHex() { return toHex(this.hash); }
-  /** Hash pré-PoW: exclui timestamp e nonce (a matriz da PoW é fixa por modelo). */
+  /** Pre-PoW hash: excludes timestamp and nonce (the PoW matrix is fixed per template). */
   prePowHash() { return H('block/prepow', this.serialize(true)); }
 }
 
@@ -82,7 +82,7 @@ export class Block {
   get hashHex() { return toHex(this.hash); }
 }
 
-/** Raiz de Merkle sem a duplicação do último nó (evita a CVE-2012-2459 do Bitcoin). */
+/** Merkle root without duplicating the last node (avoids Bitcoin's CVE-2012-2459). */
 export function merkleRoot(hashes) {
   if (hashes.length === 0) return ZERO32;
   let level = hashes;
@@ -97,11 +97,11 @@ export function merkleRoot(hashes) {
 }
 
 /**
- * Prova de inclusão (carteiras leves): os "irmãos" de cada nível até a raiz.
- * { index, count, path: [hex | null] } — null quando o nó sobe sozinho (último ímpar).
+ * Inclusion proof (light wallets): the "siblings" at each level up to the root.
+ * { index, count, path: [hex | null] } — null when the node goes up alone (last odd one).
  */
 export function merkleProof(hashes, index) {
-  if (index < 0 || index >= hashes.length) throw new Error('índice fora da árvore');
+  if (index < 0 || index >= hashes.length) throw new Error('index outside the tree');
   const path = [];
   let level = hashes, i = index;
   while (level.length > 1) {
@@ -115,7 +115,7 @@ export function merkleProof(hashes, index) {
   return { index, count: hashes.length, path };
 }
 
-/** Confere uma prova de merkleProof contra a raiz. */
+/** Checks a merkleProof proof against the root. */
 export function verifyMerkleProof(leaf, proof, root) {
   const { index, count, path } = proof;
   if (!Number.isInteger(index) || !Number.isInteger(count) || index < 0 || index >= count) return false;

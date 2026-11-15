@@ -1,3 +1,3 @@
-# Nós-semente da mainnet — vazia de propósito: a mainnet NÃO foi lançada.
-# Ela só pode ser lançada depois da testnet pública, de auditorias independentes e do
-# lançamento justo descrito em docs/WHITEPAPER.md (seção 7.6).
+# Mainnet seed nodes — empty on purpose: the mainnet has NOT been launched.
+# It can only be launched after the public testnet, independent audits and the
+# fair launch described in docs/WHITEPAPER.md (section 7.6).

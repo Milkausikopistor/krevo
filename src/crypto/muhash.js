@@ -1,8 +1,8 @@
-// MuHash3072 — hash de multiconjunto incremental (Bellare–Micciancio).
-// Compromisso do estado UTXO completo em cada cabeçalho de bloco: adicionar ou
-// remover um elemento custa uma multiplicação modular, e a ordem não importa.
-// Permite sincronizar um nó novo a partir de um "instantâneo" do estado,
-// verificando-o contra o cabeçalho — sem baixar todo o histórico.
+// MuHash3072 — incremental multiset hash (Bellare–Micciancio).
+// Commitment to the complete UTXO state in every block header: adding or removing an
+// element costs one modular multiplication, and the order does not matter. It allows
+// syncing a new node from a "snapshot" of the state, checking it against the header —
+// without downloading the whole history.
 
 import { shake256, H } from './hash.js';
 import { bytesToBigLE, bigToBytesLE } from '../util/bytes.js';

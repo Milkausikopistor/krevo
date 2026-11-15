@@ -1,20 +1,20 @@
-// Criptografia em JavaScript puro, para a carteira rodar no NAVEGADOR (onde não existe o
-// módulo node:crypto). Só o que a carteira usa:
+// Pure JavaScript cryptography, so the wallet can run in the BROWSER (where the node:crypto
+// module does not exist). Only what the wallet uses:
 //   BLAKE2b-512 (RFC 7693) · SHA-256 e SHA-512 (FIPS 180-4) · HMAC · PBKDF2 · AES-256-GCM
-// As constantes do SHA-2 são CALCULADAS (raízes de primos) e a S-box do AES vem do inverso em
-// GF(2⁸) — nada de tabelas digitadas à mão. Tudo é conferido contra o OpenSSL do Node.js com
-// milhares de entradas aleatórias (test/purecrypto.test.js).
-// Trabalha com Uint8Array (não depende de Buffer).
+// The SHA-2 constants are COMPUTED (roots of primes) and the AES S-box comes from inverses in
+// GF(2⁸) — no hand-typed tables. Everything is checked against Node.js's OpenSSL with
+// thousands of random inputs (test/purecrypto.test.js).
+// Works with Uint8Array (does not depend on Buffer).
 
 const u8 = (x) => (x instanceof Uint8Array ? x : new Uint8Array(x));
 
-// ------------------------------------------------------------------ constantes do SHA-2
+// ------------------------------------------------------------------ SHA-2 constants
 function primes(n) {
   const out = [];
   for (let c = 2; out.length < n; c++) if (out.every((p) => c % p)) out.push(c);
   return out;
 }
-function iroot(x, k) { // ⌊x^(1/k)⌋ para BigInt (Newton)
+function iroot(x, k) { // ⌊x^(1/k)⌋ for BigInt (Newton)
   if (x < 2n) return x;
   let r = 1n << BigInt(Math.ceil(x.toString(2).length / k));
   for (;;) {
@@ -67,11 +67,11 @@ export function sha256(data) {
   return out;
 }
 
-// SHA-512 com pares de 32 bits (alto, baixo)
+// SHA-512 with 32-bit pairs (high, low)
 export function sha512(data) {
   const m = mdPad(u8(data), 128, 16);
   const h = Uint32Array.from(H512), w = new Uint32Array(160);
-  const add = (...xs) => { // soma de pares de 64 bits → [alto, baixo]
+  const add = (...xs) => { // sum of 64-bit pairs → [high, low]
     let lo = 0, hi = 0;
     for (let i = 0; i < xs.length; i += 2) { lo += xs[i + 1]; hi += xs[i] + Math.floor(lo / 0x100000000); lo >>>= 0; }
     return [hi >>> 0, lo >>> 0];
@@ -109,7 +109,7 @@ export function sha512(data) {
 }
 
 // ------------------------------------------------------------------ BLAKE2b (RFC 7693)
-const B2_IV = new Uint32Array([ // os mesmos valores iniciais do SHA-512, em pares (baixo, alto)
+const B2_IV = new Uint32Array([ // the same initial values as SHA-512, in (low, high) pairs
   ...Array.from({ length: 8 }, (_, i) => [H512[2 * i + 1], H512[2 * i]]).flat(),
 ]);
 const SIGMA = [
@@ -162,7 +162,7 @@ export function blake2b(data, outLen = 64) {
   return out;
 }
 
-// ------------------------------------------------------------------ HMAC e PBKDF2
+// ------------------------------------------------------------------ HMAC and PBKDF2
 const HASHES = { sha256: [sha256, 64, 32], sha512: [sha512, 128, 64] };
 export function hmac(alg, key, data) {
   const [fn, block] = HASHES[alg];
@@ -188,7 +188,7 @@ export function pbkdf2(alg, password, salt, iterations, keyLen) {
   return out;
 }
 
-// ------------------------------------------------------------------ AES-256 e GCM
+// ------------------------------------------------------------------ AES-256 and GCM
 const SBOX = new Uint8Array(256);
 {
   const mul = (a, b) => { let p = 0; for (; b; b >>= 1) { if (b & 1) p ^= a; a = (a << 1) ^ (a & 0x80 ? 0x11b : 0); } return p & 0xff; };
@@ -203,7 +203,7 @@ const SBOX = new Uint8Array(256);
 const xtime = (a) => ((a << 1) ^ (a & 0x80 ? 0x1b : 0)) & 0xff;
 
 function expandKey(key) {
-  if (key.length !== 32) throw new Error('AES-256 precisa de chave de 32 bytes');
+  if (key.length !== 32) throw new Error('AES-256 needs a 32-byte key');
   const w = new Uint8Array(240);
   w.set(key);
   let rcon = 1;
@@ -222,7 +222,7 @@ function aesBlock(w, input) {
   for (let i = 0; i < 16; i++) s[i] ^= w[i];
   for (let round = 1; round <= 14; round++) {
     for (let i = 0; i < 16; i++) s[i] = SBOX[s[i]];
-    // ShiftRows (estado em colunas: s[c*4 + r])
+    // ShiftRows (state in columns: s[c*4 + r])
     const t = Uint8Array.from(s);
     for (let c = 0; c < 4; c++) for (let r = 1; r < 4; r++) s[c * 4 + r] = t[((c + r) % 4) * 4 + r];
     if (round < 14) {
@@ -258,10 +258,10 @@ function ghash(H, data) {
   return y;
 }
 
-/** AES-256-GCM, IV de 12 bytes, sem dados adicionais. Retorna { ct, tag }. */
+/** AES-256-GCM, 12-byte IV, no additional data. Returns { ct, tag }. */
 export function aesGcmEncrypt(key, iv, plain) {
   const w = expandKey(u8(key));
-  if (iv.length !== 12) throw new Error('IV do GCM precisa de 12 bytes');
+  if (iv.length !== 12) throw new Error('the GCM IV must have 12 bytes');
   const H = toBig(aesBlock(w, new Uint8Array(16)));
   const j0 = new Uint8Array(16); j0.set(iv); j0[15] = 1;
   plain = u8(plain);
@@ -277,10 +277,10 @@ export function aesGcmEncrypt(key, iv, plain) {
   const s = ghash(H, padded) ^ toBig(aesBlock(w, j0));
   return { ct, tag: fromBig(s, 16) };
 }
-/** Decifra e confere a etiqueta; lança erro se não conferir (como o Node). */
+/** Decrypts and checks the tag; throws if it does not match (like Node). */
 export function aesGcmDecrypt(key, iv, ct, tag) {
   ct = u8(ct);
-  const { ct: plain, tag: expected } = aesGcmEncrypt(key, iv, ct); // CTR é simétrico; a etiqueta é sobre o texto cifrado
+  const { ct: plain, tag: expected } = aesGcmEncrypt(key, iv, ct); // CTR is symmetric; the tag is over the ciphertext
   const w = expandKey(u8(key));
   const H = toBig(aesBlock(w, new Uint8Array(16)));
   const j0 = new Uint8Array(16); j0.set(iv); j0[15] = 1;
@@ -295,7 +295,7 @@ export function aesGcmDecrypt(key, iv, ct, tag) {
   return plain;
 }
 
-// ------------------------------------------------------------------ aleatoriedade
+// ------------------------------------------------------------------ randomness
 export function randomFill(n) {
   const out = new Uint8Array(n);
   for (let o = 0; o < n; o += 65536) globalThis.crypto.getRandomValues(out.subarray(o, Math.min(n, o + 65536)));

@@ -1,10 +1,10 @@
-// Gerador de QR Code (ISO/IEC 18004), sem dependências.
-// Modo byte (UTF-8), versões 1–40, correção de erro L/M/Q/H, máscara escolhida
-// pela pontuação de penalidade da norma. Algoritmo no estilo da implementação de
-// referência de Project Nayuki (MIT).
+// QR Code generator (ISO/IEC 18004), no dependencies.
+// Byte mode (UTF-8), versions 1–40, error correction L/M/Q/H, mask chosen by the standard's
+// penalty score. Algorithm in the style of Project Nayuki's reference implementation (MIT).
+//
 
 const ECC_CODEWORDS_PER_BLOCK = [
-  // versão: 0 (inválida), 1..40
+  // version: 0 (invalid), 1..40
   [-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30], // L
   [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28], // M
   [-1, 13, 22, 18, 26, 18, 24, 18, 22, 20, 24, 28, 26, 24, 20, 30, 24, 28, 28, 26, 30, 28, 30, 30, 30, 30, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30], // Q
@@ -33,7 +33,7 @@ function numRawDataModules(ver) {
 const numDataCodewords = (ver, e) =>
   Math.floor(numRawDataModules(ver) / 8) - ECC_CODEWORDS_PER_BLOCK[e][ver] * NUM_ERROR_CORRECTION_BLOCKS[e][ver];
 
-// ------------------------------------------------- Reed–Solomon sobre GF(256)
+// ------------------------------------------------- Reed–Solomon over GF(256)
 function rsMul(x, y) {
   let z = 0;
   for (let i = 7; i >= 0; i--) {
@@ -65,7 +65,7 @@ export function rsRemainder(data, divisor) {
   return r;
 }
 
-// ------------------------------------------------------------- símbolo
+// ------------------------------------------------------------- symbol
 class QR {
   constructor(ver, e, dataCodewords) {
     this.version = ver; this.ecl = e; this.size = ver * 4 + 17;
@@ -134,7 +134,7 @@ class QR {
     for (let i = 9; i < 15; i++) this.set(14 - i, 8, getBit(bits, i));
     for (let i = 0; i < 8; i++) this.set(n - 1 - i, 8, getBit(bits, i));
     for (let i = 8; i < 15; i++) this.set(8, n - 15 + i, getBit(bits, i));
-    this.set(8, n - 8, true); // módulo escuro fixo
+    this.set(8, n - 8, true); // fixed dark module
   }
 
   drawVersion() {
@@ -205,7 +205,7 @@ class QR {
     }
   }
 
-  /** Penalidade da norma (regras N1–N4): só afeta a facilidade de leitura, não a validade. */
+  /** The standard's penalty (rules N1–N4): it only affects readability, not validity. */
   penalty() {
     const n = this.size, m = this.modules;
     let score = 0, dark = 0;
@@ -241,17 +241,17 @@ class QR {
   }
 }
 
-/** Codifica texto (UTF-8) e devolve { version, size, mask, modules: boolean[][] }. */
+/** Encodes text (UTF-8) and returns { version, size, mask, modules: boolean[][] }. */
 export function encodeQR(text, level = 'M') {
   const e = ECL[level];
-  if (e === undefined) throw new Error('nível de correção inválido');
+  if (e === undefined) throw new Error('invalid error-correction level');
   const bytes = [...Buffer.from(text, 'utf8')];
   let ver = 1;
   for (; ver <= 40; ver++) {
     const ccBits = ver < 10 ? 8 : 16;
     if (bytes.length < 2 ** ccBits && 4 + ccBits + bytes.length * 8 <= numDataCodewords(ver, e) * 8) break;
   }
-  if (ver > 40) throw new Error('texto longo demais para um QR code');
+  if (ver > 40) throw new Error('text too long for a QR code');
   const bits = [];
   const put = (val, len) => { for (let i = len - 1; i >= 0; i--) bits.push((val >>> i) & 1); };
   put(0x4, 4);
@@ -267,7 +267,7 @@ export function encodeQR(text, level = 'M') {
   return { version: q.version, size: q.size, mask: q.mask, modules: q.modules };
 }
 
-/** Desenho para terminal: meio-blocos com cores ANSI fixas (preto no branco), 2 linhas por caractere. */
+/** Terminal drawing: half blocks with fixed ANSI colors (black on white), 2 rows per character. */
 export function qrToTerminal(qr, border = 2) {
   const n = qr.size, dark = (x, y) => x >= 0 && y >= 0 && x < n && y < n && qr.modules[y][x];
   const W = '\x1b[97m', B = '\x1b[30m', WB = '\x1b[107m', BB = '\x1b[40m', RESET = '\x1b[0m';
@@ -276,7 +276,7 @@ export function qrToTerminal(qr, border = 2) {
     let s = '', fg = null, bg = null;
     for (let x = -border; x < n + border; x++) {
       const top = dark(x, y), bottom = dark(x, y + 1);
-      if (top !== fg) { s += top ? B : W; fg = top; }       // só emite cor quando muda
+      if (top !== fg) { s += top ? B : W; fg = top; }       // only emits color when it changes
       if (bottom !== bg) { s += bottom ? BB : WB; bg = bottom; }
       s += '▀';
     }
@@ -285,7 +285,7 @@ export function qrToTerminal(qr, border = 2) {
   return lines.join('\n');
 }
 
-/** SVG autocontido (escala livre, ótimo para imprimir). `caption` aparece abaixo do código. */
+/** Self-contained SVG (free scaling, great for printing). `caption` appears below the code. */
 export function qrToSvg(qr, { border = 4, caption = [] } = {}) {
   const n = qr.size + border * 2, capH = caption.length ? caption.length * 3 + 2 : 0;
   let path = '';

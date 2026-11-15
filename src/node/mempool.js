@@ -1,7 +1,7 @@
-// Mempool: transações válidas contra o estado do virtual, aguardando um bloco.
-// Seleção para blocos: amostragem aleatória ponderada pela taxa (Efraimidis–Spirakis),
-// para que mineradores paralelos escolham conjuntos diferentes e o DAG não
-// desperdice espaço com a mesma transação em vários blocos simultâneos.
+// Mempool: transactions valid against the virtual state, waiting for a block.
+// Selection for blocks: random sampling weighted by fee (Efraimidis–Spirakis),
+// so that parallel miners pick different sets and the DAG does not
+// waste space with the same transaction in several simultaneous blocks.
 
 import { validateTxStateless, validateTxInContext, shieldedDelta } from '../consensus/txvalidation.js';
 import { outpointKey } from '../consensus/tx.js';
@@ -19,23 +19,23 @@ export class Mempool {
     consensus.on('virtual', () => this.revalidate());
   }
 
-  /** Valida sem inserir (usado também na fase "haste" do Dandelion++). */
+  /** Validates without inserting (also used in Dandelion++'s "stem" phase). */
   check(tx) {
     const id = tx.idHex;
-    if (this.c.txStatus(id).status === 'accepted') throw new Error('transação já confirmada');
+    if (this.c.txStatus(id).status === 'accepted') throw new Error('transaction already confirmed');
     validateTxStateless(tx, this.params);
-    for (const i of tx.tIn) if (this.spent.has(outpointKey(i.outpoint.txid, i.outpoint.index))) throw new Error('conflito com transação no mempool');
-    for (const si of tx.sIn) if (this.kis.has(toHex(si.keyImage))) throw new Error('imagem de chave já usada no mempool');
+    for (const i of tx.tIn) if (this.spent.has(outpointKey(i.outpoint.txid, i.outpoint.index))) throw new Error('conflict with a transaction in the mempool');
+    for (const si of tx.sIn) if (this.kis.has(toHex(si.keyImage))) throw new Error('key image already used in the mempool');
     const v = this.c.virtual;
     const r = validateTxInContext(tx, v.view, v.gd.daaScore, this.params);
-    if ((v.acceptance.shielded ?? 0n) + shieldedDelta(tx, r.tIn) < 0n) throw new Error('catraca: retiraria do pool privado mais KRV do que existe nele');
-    if (tx.fee < BigInt(tx.mass) * this.params.minRelayFeeRate) throw new Error('taxa abaixo do mínimo de retransmissão');
+    if ((v.acceptance.shielded ?? 0n) + shieldedDelta(tx, r.tIn) < 0n) throw new Error('turnstile: would withdraw more KRV from the private pool than exists in it');
+    if (tx.fee < BigInt(tx.mass) * this.params.minRelayFeeRate) throw new Error('fee below the minimum relay fee');
   }
 
   add(tx) {
     const id = tx.idHex;
     if (this.txs.has(id)) return { ok: true, txid: id, duplicate: true };
-    if (this.txs.size >= this.maxSize) return { ok: false, txid: id, reason: 'mempool cheio' };
+    if (this.txs.size >= this.maxSize) return { ok: false, txid: id, reason: 'mempool full' };
     try { this.check(tx); } catch (e) { return { ok: false, txid: id, reason: e.message }; }
     this.txs.set(id, { tx, feeRate: Number(tx.fee) / Math.max(tx.mass, 1), added: Date.now() });
     for (const i of tx.tIn) this.spent.set(outpointKey(i.outpoint.txid, i.outpoint.index), id);
@@ -57,7 +57,7 @@ export class Mempool {
     const v = this.c.virtual;
     for (const [id, e] of [...this.txs]) {
       try {
-        if (v.acceptance.acceptedSet.has(id) || this.c.txIndex.has(id)) throw new Error('confirmada');
+        if (v.acceptance.acceptedSet.has(id) || this.c.txIndex.has(id)) throw new Error('confirmed');
         validateTxInContext(e.tx, v.view, v.gd.daaScore, this.params);
       } catch { this.remove(id); }
     }

@@ -1,8 +1,8 @@
-//! Hash com separação de domínio (igual a src/crypto/hash.js):
-//! H64(domínio, partes…) = BLAKE2b-512("KRV" ‖ len(domínio) ‖ domínio ‖ Σ u32le(len(parte)) ‖ parte)
-//! H = os primeiros 32 bytes.
-//! Codificação das partes no JavaScript: Buffer → bytes; string → UTF-8; number → u64 LE;
-//! bigint → 32 bytes big-endian; ponto → 33 bytes comprimidos.
+//! Hash with domain separation (same as src/crypto/hash.js):
+//! H64(domain, parts…) = BLAKE2b-512("KRV" ‖ len(domain) ‖ domain ‖ Σ u32le(len(part)) ‖ part)
+//! H = the first 32 bytes.
+//! Encoding of the parts in JavaScript: Buffer → bytes; string → UTF-8; number → u64 LE;
+//! bigint → 32 bytes big-endian; point → 33 compressed bytes.
 
 use blake2::{Blake2b512, Digest};
 use sha3::digest::{ExtendableOutput, Update, XofReader};
@@ -18,15 +18,15 @@ impl H {
         Digest::update(&mut h, domain.as_bytes());
         H(h)
     }
-    /// Parte em bytes.
+    /// Part as bytes.
     pub fn b(mut self, p: &[u8]) -> Self {
         Digest::update(&mut self.0, (p.len() as u32).to_le_bytes());
         Digest::update(&mut self.0, p);
         self
     }
-    /// Parte texto (UTF-8).
+    /// Text part (UTF-8).
     pub fn s(self, s: &str) -> Self { self.b(s.as_bytes()) }
-    /// Parte "number" do JavaScript (u64 little-endian).
+    /// JavaScript "number" part (u64 little-endian).
     pub fn n(self, v: u64) -> Self { self.b(&v.to_le_bytes()) }
     pub fn d64(self) -> [u8; 64] { self.0.finalize().into() }
     pub fn d32(self) -> [u8; 32] { self.d64()[..32].try_into().unwrap() }

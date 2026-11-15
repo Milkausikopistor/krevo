@@ -1,4 +1,4 @@
-// Explorador de blocos: páginas, API JSON, busca e escape de HTML.
+// Block explorer: pages, JSON API, search and HTML escaping.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -25,7 +25,7 @@ async function mineVia(url, address, n) {
   }
 }
 
-test('explorador: painel, bloco, transação, endereço, busca e API', async () => {
+test('explorer: dashboard, block, transaction, address, search and API', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-explorer-'));
   const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
@@ -38,61 +38,61 @@ test('explorador: painel, bloco, transação, endereço, busca e API', async () 
     const bob = Wallet.create(path.join(dir, 'b.json'), params, url);
     await mineVia(url, alice.tAddress, 20);
     await mineVia(url, bob.sAddress, 6);
-    const pay = await alice.send({ to: bob.tAddress, amount: COIN / 2n, from: 'transparente' });
-    const shield = await alice.send({ to: bob.sAddress, amount: COIN / 4n, from: 'transparente', memo: 'segredo' });
+    const pay = await alice.send({ to: bob.tAddress, amount: COIN / 2n, from: 'transparent' });
+    const shield = await alice.send({ to: bob.sAddress, amount: COIN / 4n, from: 'transparent', memo: 'secret' });
     await mineVia(url, alice.tAddress, 2);
 
-    // painel
+    // dashboard
     const home = await get('/');
     assert.equal(home.status, 200);
-    assert.match(home.text, /Explorador Krevo/);
-    assert.match(home.text, /DAG ao vivo/);
+    assert.match(home.text, /Krevo Explorer/);
+    assert.match(home.text, /Live DAG/);
     assert.match(home.text, /<svg class="dag"/);
-    assert.match(home.text, /blocos por segundo/);
-    const panel = JSON.parse((await get('/api/painel')).text);
-    assert.ok(panel.dag.includes('<rect') && panel.blocks.includes('/bloco/') && panel.txs.includes(pay.txid.slice(0, 10)));
+    assert.match(home.text, /blocks per second/);
+    const panel = JSON.parse((await get('/api/panel')).text);
+    assert.ok(panel.dag.includes('<rect') && panel.blocks.includes('/block/') && panel.txs.includes(pay.txid.slice(0, 10)));
 
-    // transação transparente: valores visíveis; blindagem: partes ocultas, memo cifrado
+    // transparent transaction: visible amounts; shielding: hidden parts, encrypted memo
     const t1 = await get(`/tx/${pay.txid}`);
     assert.equal(t1.status, 200);
-    assert.match(t1.text, /Transparente/);
-    assert.match(t1.text, /0,5 KRV/);
-    assert.match(t1.text, /aceita/);
+    assert.match(t1.text, /Transparent/);
+    assert.match(t1.text, /0\.5 KRV/);
+    assert.match(t1.text, /accepted/);
     const t2 = await get(`/tx/${shield.txid}`);
-    assert.match(t2.text, /Blindagem/);
-    assert.match(t2.text, /saída privada/);
+    assert.match(t2.text, /Shielding/);
+    assert.match(t2.text, /private output/);
     assert.match(t2.text, /Memo/);
-    assert.ok(!t2.text.includes('segredo'), 'o memo nunca aparece');
+    assert.ok(!t2.text.includes('secret'), 'the memo never shows up');
     const api = JSON.parse((await get(`/api/tx/${shield.txid}`)).text);
-    assert.equal(api.memo, 'cifrado');
+    assert.equal(api.memo, 'encrypted');
     assert.equal(api.outputs.find((o) => o.type === 'shielded').amount, undefined);
 
-    // bloco
+    // block
     const info = await rpc(url, 'getinfo');
-    const blk = await get(`/bloco/${info.virtual.selectedParent}`);
+    const blk = await get(`/block/${info.virtual.selectedParent}`);
     assert.equal(blk.status, 200);
-    assert.match(blk.text, /Pai selecionado/);
-    assert.match(blk.text, /Recompensas pagas/);
+    assert.match(blk.text, /Selected parent/);
+    assert.match(blk.text, /Rewards paid/);
 
-    // endereços
-    const ta = await get(`/endereco/${bob.tAddress}`);
-    assert.match(ta.text, /Endereço transparente/);
-    assert.match(ta.text, /0,5 KRV/);
-    assert.match(ta.text, /\+0,5 KRV/);
-    const sa = await get(`/endereco/${bob.sAddress}`);
-    assert.match(sa.text, /privacidade funcionando/);
-    assert.ok(!/0,25 KRV/.test(sa.text));
+    // addresses
+    const ta = await get(`/address/${bob.tAddress}`);
+    assert.match(ta.text, /Transparent address/);
+    assert.match(ta.text, /0\.5 KRV/);
+    assert.match(ta.text, /\+0\.5 KRV/);
+    const sa = await get(`/address/${bob.sAddress}`);
+    assert.match(sa.text, /privacy working/);
+    assert.ok(!/0\.25 KRV/.test(sa.text));
 
-    // busca
-    assert.equal((await get(`/busca?q=${pay.txid}`)).loc, `/tx/${pay.txid}`);
-    assert.equal((await get(`/busca?q=${info.virtual.selectedParent}`)).loc, `/bloco/${info.virtual.selectedParent}`);
-    assert.equal((await get(`/busca?q=${bob.tAddress}`)).loc, `/endereco/${bob.tAddress}`);
-    const xss = await get('/busca?q=' + encodeURIComponent('<script>alert(1)</script>'));
+    // search
+    assert.equal((await get(`/search?q=${pay.txid}`)).loc, `/tx/${pay.txid}`);
+    assert.equal((await get(`/search?q=${info.virtual.selectedParent}`)).loc, `/block/${info.virtual.selectedParent}`);
+    assert.equal((await get(`/search?q=${bob.tAddress}`)).loc, `/address/${bob.tAddress}`);
+    const xss = await get('/search?q=' + encodeURIComponent('<script>alert(1)</script>'));
     assert.equal(xss.status, 404);
-    assert.ok(!xss.text.includes('<script>alert(1)'), 'entrada do usuário é escapada');
+    assert.ok(!xss.text.includes('<script>alert(1)'), 'user input is escaped');
     assert.ok(xss.text.includes('&lt;script&gt;'));
-    assert.equal((await get('/bloco/' + 'ab'.repeat(32))).status, 404);
-    assert.equal((await get('/nada')).status, 404);
+    assert.equal((await get('/block/' + 'ab'.repeat(32))).status, 404); assert.equal((await get(`/bloco/${info.virtual.selectedParent}`)).status, 200, 'links from older versions still work');
+    assert.equal((await get('/nothing')).status, 404);
     assert.equal((await get('/', { method: 'POST' })).status, 405);
   } finally {
     await ex.close();
@@ -100,7 +100,7 @@ test('explorador: painel, bloco, transação, endereço, busca e API', async () 
   }
 });
 
-test('explorador: desenho do DAG coloca paralelos lado a lado e liga aos pais', () => {
+test('explorer: the DAG drawing puts parallel blocks side by side and links them to their parents', () => {
   const blocks = [
     { hash: 'a'.repeat(64), parents: [], blueScore: 1, chain: true, color: 'blue', txs: 0 },
     { hash: 'b'.repeat(64), parents: ['a'.repeat(64)], blueScore: 2, chain: true, color: 'blue', txs: 1 },
@@ -110,7 +110,7 @@ test('explorador: desenho do DAG coloca paralelos lado a lado e liga aos pais', 
   const svg = dagSvg(blocks);
   assert.equal((svg.match(/<rect/g) ?? []).length, 4);
   assert.equal((svg.match(/<line/g) ?? []).length, 4);
-  assert.equal((svg.match(/class="e sp"/g) ?? []).length, 2, 'arestas da cadeia selecionada em destaque');
+  assert.equal((svg.match(/class="e sp"/g) ?? []).length, 2, 'selected chain edges highlighted');
   assert.match(svg, /class="n red"/);
   assert.match(svg, /class="n chain tip"/);
 });

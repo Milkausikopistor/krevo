@@ -717,7 +717,7 @@ the inputs, run in parallel threads — and verifying ~1 s per input; native cod
 faster. Measured on the devnet with real processes: a private payment with one input, 4,131 bytes,
 fee 0.0003 KRV, proved in 9.2 s and accepted 106 ms after submission; a light-wallet payment with two
 inputs, 7,056 bytes, proved in 11.7 s and accepted 45 ms after submission. With the native prover of
-the Rust node (`krevod provar`, which the wallets use automatically when it is built) the same two
+the Rust node (`krevod prove`, which the wallets use automatically when it is built) the same two
 payments were proved in 1.7 s and 2.0 s, and the Rust node verifies a proof in ~0.15 s. Without the
 binary, the same Rust code compiled to WebAssembly proves instead (section 4.18): one input at depth 4
 in ~10 s sequentially, as in browsers (pure JavaScript: ~18 s); in the browser test environment the
@@ -1013,7 +1013,7 @@ money** until the items below are resolved:
    and was checked against the JavaScript node on test vectors, 29 complete chains re-validated with
    identical state, and a mixed JavaScript/Rust network with miners and wallets. Its constant-time wallet
    code, compiled to WebAssembly, already handles every secret of the JavaScript wallets (section 4.18),
-   and its native full-chain prover (`krevod provar`) serves the desktop wallets. Still to do: measuring
+   and its native full-chain prover (`krevod prove`) serves the desktop wallets. Still to do: measuring
    constant time on more CPUs and engines, a key-value database with pruning, parallel validation in the
    rusty-kaspa style. The JavaScript version remains the executable specification and the source of
    test vectors.
@@ -1027,7 +1027,7 @@ money** until the items below are resolved:
    explorer (live DAG view, blocks, transactions, transparent addresses, JSON API) already exists and
    shows private parts only as hidden; a public deployment needs pruning-aware indexes and rate limits.
 6. Evaluate **DAGKNIGHT** (GHOSTDAG's successor without a fixed k) and higher block rates.
-7. **Faster full-chain proofs:** the native prover (`krevod provar`) and the WebAssembly build for
+7. **Faster full-chain proofs:** the native prover (`krevod prove`) and the WebAssembly build for
    browsers and phones exist; next, the two halves in parallel Web Workers, and elliptic-curve divisors to shrink the circuits
    (as in FCMP++); and **Janus-resistant subaddresses** (Carrot-style).
 8. **Private multisig** and **FROST threshold signatures** (multisig indistinguishable from single-key).

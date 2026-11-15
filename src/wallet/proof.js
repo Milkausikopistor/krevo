@@ -1,14 +1,14 @@
-// Prova de pagamento: "a saída j da transação T pagou V KRV ao endereço privado (C, D)".
+// Proof of payment: "output j of transaction T paid V KRV to the private address (C, D)".
 //
-// Quem pagou conhece o segredo r da saída (R = r·D está publicado na própria saída).
-// A prova revela apenas S = r·C — o segredo compartilhado DAQUELA saída com AQUELE
-// destinatário — e uma prova de igualdade de logaritmos discretos (Chaum–Pedersen /
-// DLEQ) de que log_D(R) = log_C(S). Assim:
-//   • r continua secreto e nenhuma outra saída da transação (como o troco) é exposta;
-//   • nenhuma chave da carteira de quem pagou ou de quem recebeu é revelada;
-//   • com S, qualquer pessoa recalcula a saída do destinatário, o valor e o memo;
-//   • a prova fica amarrada ao txid, à saída e a uma mensagem opcional (ex.: "pedido 123"),
-//     e não pode ser reaproveitada para outro endereço ou mensagem sem conhecer r.
+// The payer knows the output's secret r (R = r·D is published in the output itself).
+// The proof reveals only S = r·C — the shared secret of THAT output with THAT recipient —
+// and a proof of equality of discrete logarithms (Chaum–Pedersen / DLEQ) that
+// log_D(R) = log_C(S). Thus:
+//   • r stays secret and no other output of the transaction (such as the change) is exposed;
+//   • no key of the payer's or the recipient's wallet is revealed;
+//   • with S, anyone recomputes the recipient's output, the amount and the memo;
+//   • the proof is bound to the txid, the output and an optional message (e.g. "order 123"),
+//     and cannot be reused for another address or message without knowing r.
 
 import { modN, randomScalar, hedgedScalar, hashToScalar, scalarToBytes, scalarFromBytes, Point, multiexp, mulG } from '../crypto/secp256k1.js';
 import { encode, decode } from '../util/bech32m.js';
@@ -21,10 +21,10 @@ const VERSION = 0x02;
 const challenge = (txid, j, R, D, C, S, T1, T2, message) =>
   hashToScalar('proof/payment', txid, j, R, D, C, S, T1, T2, Buffer.from(message ?? '', 'utf8'));
 
-/** Cria a prova. txid: Buffer(32); r: segredo da saída j; address: endereço privado do destinatário. */
+/** Creates the proof. txid: Buffer(32); r: secret of output j; address: the recipient's private address. */
 export function createPaymentProof(params, { txid, r, j = 0, address, message = '' }) {
   const addr = decodeAddress(params, address);
-  if (addr.type !== 's') throw new Error('provas de pagamento são para endereços privados (pagamentos transparentes já são públicos)');
+  if (addr.type !== 's') throw new Error('payment proofs are for private addresses (transparent payments are already public)');
   const D = addr.B, C = addr.A;
   const R = D.mul(r), S = C.mul(r);
   for (;;) {
@@ -32,16 +32,16 @@ export function createPaymentProof(params, { txid, r, j = 0, address, message = 
     const c = challenge(txid, j, R, D, C, S, D.mul(k), C.mul(k), message);
     if (c === 0n) continue;
     const s = modN(k - c * r);
-    // confere antes de sair (D·s + R·c = D·k e C·s + S·c = C·k)
-    if (challenge(txid, j, R, D, C, S, D.mul(s).add(R.mul(c)), C.mul(s).add(S.mul(c)), message) !== c) throw new Error('falha ao criar a prova (verificação)');
+    // check before returning (D·s + R·c = D·k and C·s + S·c = C·k)
+    if (challenge(txid, j, R, D, C, S, D.mul(s).add(R.mul(c)), C.mul(s).add(S.mul(c)), message) !== c) throw new Error('failed to create the proof (verification)');
     return encode(params.hrp.p, Buffer.concat([Buffer.from([VERSION]), txid, Buffer.from([j]), S.toBytes(), scalarToBytes(c), scalarToBytes(s)]));
   }
 }
 
 export function decodePaymentProof(params, str) {
   const { hrp, bytes } = decode(str.trim());
-  if (hrp !== params.hrp.p) throw new Error(`prova de outra rede ou formato (prefixo ${hrp}, esperado ${params.hrp.p})`);
-  if (bytes.length !== 1 + 32 + 1 + 33 + 64 || bytes[0] !== VERSION) throw new Error('prova malformada');
+  if (hrp !== params.hrp.p) throw new Error(`proof from another network or format (prefix ${hrp}, expected ${params.hrp.p})`);
+  if (bytes.length !== 1 + 32 + 1 + 33 + 64 || bytes[0] !== VERSION) throw new Error('malformed proof');
   return {
     txid: bytes.subarray(1, 33),
     j: bytes[33],
@@ -52,7 +52,7 @@ export function decodePaymentProof(params, str) {
 }
 
 /**
- * Verifica contra a transação (obtida de um nó). Retorna
+ * Verifies against the transaction (obtained from a node). Returns
  * { valid, reason?, outputs:[{j, amount}], total, memo }.
  */
 export function verifyPaymentProof(params, { proof, address, tx, message = '' }) {
@@ -60,22 +60,22 @@ export function verifyPaymentProof(params, { proof, address, tx, message = '' })
   let p, addr;
   try { p = decodePaymentProof(params, proof); } catch (e) { return no(e.message); }
   try { addr = decodeAddress(params, address); } catch (e) { return no(e.message); }
-  if (addr.type !== 's') return no('o endereço precisa ser privado (krs1…)');
-  if (!p.txid.equals(tx.id)) return no('a prova é de outra transação');
+  if (addr.type !== 's') return no('the address must be private (krs1…)');
+  if (!p.txid.equals(tx.id)) return no('the proof is for another transaction');
   const o = tx.sOut[p.j];
-  if (!o) return no('a transação não tem essa saída privada');
+  if (!o) return no('the transaction does not have that private output');
   const D = addr.B, C = addr.A, R = Point.fromBytes(o.R);
   const T1 = multiexp([p.s, p.c], [D, R]);
   const T2 = multiexp([p.s, p.c], [C, p.S]);
   if (challenge(tx.id, p.j, R, D, C, p.S, T1, T2, message) !== p.c) {
-    return no('assinatura da prova não confere (prova adulterada, endereço errado ou mensagem diferente)');
+    return no('the proof\'s signature does not check out (tampered proof, wrong address or different message)');
   }
   const ss = p.S.toBytes(), j = p.j;
   if (viewTag(ss, j) !== o.viewTag || !mulG(outputScalar(ss, j)).add(D).equals(Point.fromBytes(o.P))) {
-    return no('a saída não foi paga a este endereço');
+    return no('the output was not paid to this address');
   }
   const amount = decryptAmount(o.encAmount, ss, j);
-  if (!commit(amount, blindingFactor(ss, j)).equals(Point.fromBytes(o.C))) return no('valor não confere com o compromisso');
+  if (!commit(amount, blindingFactor(ss, j)).equals(Point.fromBytes(o.C))) return no('the amount does not match the commitment');
   const memo = j === 0 ? decryptMemo(tx.payload, ss, 0) : null;
   return { valid: true, outputs: [{ j, amount }], total: amount, memo: memo || null };
 }

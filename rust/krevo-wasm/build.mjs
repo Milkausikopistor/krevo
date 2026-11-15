@@ -1,7 +1,7 @@
-// Compila o núcleo criptográfico para WebAssembly e copia para src/crypto/krevo_core.wasm.
-//   rustup target add wasm32-unknown-unknown   (uma vez)
+// Builds the crypto core to WebAssembly and copies it to src/crypto/krevo_core.wasm.
+//   rustup target add wasm32-unknown-unknown   (once)
 //   node rust/krevo-wasm/build.mjs [--release]
-// O .wasm compilado já vem no repositório; recompile depois de mudar rust/krevod/src.
+// The compiled .wasm is already in the repository; rebuild it after changing rust/krevod/src.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';

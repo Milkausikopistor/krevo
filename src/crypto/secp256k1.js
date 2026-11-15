@@ -1,11 +1,11 @@
-// Curva secp256k1 (y² = x³ + 7) — grupo de ordem prima, sem cofator.
-// Implementação em JavaScript puro com BigInt e coordenadas Jacobianas.
+// The secp256k1 curve (y² = x³ + 7) — prime-order group, no cofactor.
+// Pure JavaScript implementation with BigInt and Jacobian coordinates.
 //
-// Multiplicações por escalar (k·P, k·G) vão para o núcleo em Rust/WebAssembly (./wasm.js), que
-// é de TEMPO CONSTANTE: chaves, máscaras e nonces não vazam pelo tempo de execução nem pelo
-// padrão de acesso à memória. A aritmética em BigInt abaixo continua servindo à verificação
-// (multiexponenciação de dados públicos) e é o plano B se o WebAssembly não estiver
-// disponível — correta, mas sem garantia de tempo constante.
+// Scalar multiplications (k·P, k·G) go to the Rust/WebAssembly core (./wasm.js), which is
+// CONSTANT-TIME: keys, masks and nonces do not leak through execution time or memory access
+// patterns. The BigInt arithmetic below keeps serving verification (multi-exponentiation of
+// public data) and is the fallback if WebAssembly is not available — correct, but without the
+// constant-time guarantee.
 
 import { randomBytes } from 'node:crypto';
 import { H, H64 } from './hash.js';
@@ -17,11 +17,11 @@ export const N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364
 const GX = 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798n;
 const GY = 0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8n;
 
-// ---------------------------------------------------------------- campo F_p
+// ---------------------------------------------------------------- field F_p
 const MASK256 = (1n << 256n) - 1n;
 const FOLD = 0x1000003d1n; // 2^256 mod p
 
-function fr(x) { // reduz x >= 0 (até ~2^520) módulo p usando a forma especial de p
+function fr(x) { // reduces x >= 0 (up to ~2^520) modulo p using the special form of p
   let h = x >> 256n; x = (x & MASK256) + h * FOLD;
   h = x >> 256n; x = (x & MASK256) + h * FOLD;
   return x >= P ? x - P : x;
@@ -33,14 +33,14 @@ const fsqr = (a) => fr(a * a);
 
 function invMod(a, m) {
   a %= m; if (a < 0n) a += m;
-  if (a === 0n) throw new Error('inverso de zero');
+  if (a === 0n) throw new Error('inverse of zero');
   let r0 = a, r1 = m, s0 = 1n, s1 = 0n;
   while (r1 !== 0n) {
     const q = r0 / r1;
     [r0, r1] = [r1, r0 - q * r1];
     [s0, s1] = [s1, s0 - q * s1];
   }
-  if (r0 !== 1n) throw new Error('não inversível');
+  if (r0 !== 1n) throw new Error('not invertible');
   s0 %= m; return s0 < 0n ? s0 + m : s0;
 }
 const finv = (a) => invMod(a, P);
@@ -53,7 +53,7 @@ function fpow(b, e) {
 const SQRT_EXP = (P + 1n) / 4n;
 function fsqrt(a) { const y = fpow(a, SQRT_EXP); return fsqr(y) === a ? y : null; }
 
-// ------------------------------------------------------------ escalares mod n
+// ------------------------------------------------------------ scalars mod n
 export const modN = (a) => { a %= N; return a < 0n ? a + N : a; };
 export const invN = (a) => invMod(a, N);
 export function randomScalar() {
@@ -64,10 +64,10 @@ export function randomScalar() {
 }
 export const scalarToBytes = (s) => bigToBytesBE(modN(s), 32);
 /**
- * Nonce "hedged": hash do domínio, dos segredos, da mensagem E de 32 bytes aleatórios.
- * Com gerador aleatório quebrado ou previsível vira determinístico (nunca repete para
- * mensagens diferentes — repetir um nonce entregaria a chave); com gerador bom, a parte
- * aleatória protege contra ataques de falha que exploram nonces determinísticos.
+ * "Hedged" nonce: hash of the domain, the secrets, the message AND 32 random bytes.
+ * With a broken or predictable random generator it becomes deterministic (it never repeats for
+ * different messages — repeating a nonce would give away the key); with a good generator, the
+ * random part protects against fault attacks that exploit deterministic nonces.
  */
 export function hedgedScalar(domain, ...parts) {
   for (;;) {
@@ -75,18 +75,18 @@ export function hedgedScalar(domain, ...parts) {
     if (k !== 0n) return k;
   }
 }
-/** Lê escalar canônico (< n). Lança erro se não canônico. */
+/** Reads a canonical scalar (< n). Throws if not canonical. */
 export function scalarFromBytes(b) {
-  if (b.length !== 32) throw new Error('escalar deve ter 32 bytes');
+  if (b.length !== 32) throw new Error('a scalar must have 32 bytes');
   const s = bytesToBigBE(b);
-  if (s >= N) throw new Error('escalar não canônico');
+  if (s >= N) throw new Error('non-canonical scalar');
   return s;
 }
-/** Hash para escalar (64 bytes de hash → viés desprezível). */
+/** Hash to scalar (64 bytes of hash → negligible bias). */
 export const hashToScalar = (domain, ...parts) => bytesToBigBE(H64(domain, ...parts)) % N;
 
-// ---------------------------------------------------- aritmética Jacobiana
-// Ponto = [X, Y, Z]; infinito tem Z = 0.
+// ---------------------------------------------------- Jacobian arithmetic
+// Point = [X, Y, Z]; infinity has Z = 0.
 const JINF = [0n, 1n, 0n];
 
 function jdbl(p) {
@@ -142,7 +142,7 @@ function jtoAffine(p) {
   return [fmul(p[0], zi2), fmul(p[1], fmul(zi2, zi))];
 }
 
-/** Normaliza vários pontos para coordenadas afins com uma única inversão. */
+/** Normalizes several points to affine coordinates with a single inversion. */
 function batchAffine(points) {
   const n = points.length, acc = new Array(n);
   let run = 1n;
@@ -163,7 +163,7 @@ function batchAffine(points) {
   return out;
 }
 
-function nibbles(k) { // 64 dígitos hexadecimais, do mais significativo ao menos
+function nibbles(k) { // 64 hexadecimal digits, most significant first
   const s = k.toString(16).padStart(64, '0');
   const d = new Array(64);
   for (let i = 0; i < 64; i++) d[i] = parseInt(s[i], 16);
@@ -219,7 +219,7 @@ export class Point {
     return fmul(X1, Z2Z2) === fmul(X2, Z1Z1) &&
       fmul(fmul(Y1, Z2), Z2Z2) === fmul(fmul(Y2, Z1), Z1Z1);
   }
-  /** Codificação comprimida de 33 bytes. O infinito é codificado como 33 zeros. */
+  /** 33-byte compressed encoding. Infinity is encoded as 33 zeros. */
   toBytes() {
     const a = this.affine();
     if (!a) return Buffer.alloc(33);
@@ -229,14 +229,14 @@ export class Point {
     return out;
   }
   hex() { return this.toBytes().toString('hex'); }
-  /** Decodifica um ponto comprimido. Rejeita o infinito e pontos fora da curva. */
+  /** Decodes a compressed point. Rejects infinity and points off the curve. */
   static fromBytes(b) {
     b = Buffer.from(b);
-    if (b.length !== 33 || (b[0] !== 2 && b[0] !== 3)) throw new Error('ponto inválido');
+    if (b.length !== 33 || (b[0] !== 2 && b[0] !== 3)) throw new Error('invalid point');
     const x = bytesToBigBE(b.subarray(1));
-    if (x >= P) throw new Error('ponto inválido (x >= p)');
+    if (x >= P) throw new Error('invalid point (x >= p)');
     let y = fsqrt(fadd(fmul(fsqr(x), x), 7n));
-    if (y === null) throw new Error('ponto fora da curva');
+    if (y === null) throw new Error('point not on the curve');
     if ((y & 1n) !== BigInt(b[0] & 1)) y = P - y;
     return Point.fromAffine(x, y);
   }
@@ -245,11 +245,11 @@ export class Point {
 export const INF = new Point(0n, 1n, 0n);
 export const G = Point.fromAffine(GX, GY);
 
-// ------------------------------------------------- base fixa (tabela pré-computada)
+// ------------------------------------------------- fixed base (precomputed table)
 export class FixedBase {
   constructor(point) {
     this.point = point;
-    this.table = null; // construída sob demanda
+    this.table = null; // built on demand
   }
   _build() {
     const rows = [];
@@ -291,10 +291,10 @@ export function mulG(k) {
   return G_TABLE.mul(k);
 }
 
-// ------------------------------------------------------- multiexponenciação
+// ------------------------------------------------------- multi-exponentiation
 /**
- * Σ scalars[i] · points[i]. Usa Straus para poucos termos e Pippenger
- * (método de baldes) para muitos — essencial para verificar Bulletproofs.
+ * Σ scalars[i] · points[i]. Uses Straus for a few terms and Pippenger (bucket method) for
+ * many — essential for verifying Bulletproofs.
  */
 export function multiexp(scalars, points) {
   if (scalars.length !== points.length) throw new Error('multiexp: tamanhos diferentes');
@@ -307,7 +307,7 @@ export function multiexp(scalars, points) {
   }
   const n = ks.length;
   if (n === 0) return INF;
-  // Separa o termo de G para usar a tabela fixa.
+  // Separates the G term to use the fixed table.
   let accG = JINF;
   const ks2 = [], js2 = [];
   for (let i = 0; i < n; i++) {
@@ -345,7 +345,7 @@ function pippenger(ks, js) {
   const c = n < 64 ? 5 : n < 256 ? 6 : n < 1024 ? 7 : 8;
   const cb = BigInt(c), mask = (1n << cb) - 1n;
   const windows = Math.ceil(256 / c);
-  // pontos em afim para somas mistas mais baratas
+  // affine points for cheaper mixed additions
   const aff = batchAffine(js);
   let acc = JINF;
   for (let w = windows - 1; w >= 0; w--) {
@@ -366,11 +366,11 @@ function pippenger(ks, js) {
   return acc;
 }
 
-// ------------------------------------------------------------ hash → ponto
+// ------------------------------------------------------------ hash → point
 /**
- * Mapeia dados para um ponto da curva cujo logaritmo discreto ninguém conhece
- * (try-and-increment). Usado para geradores "nada na manga" e imagens de chave.
- * Não é tempo constante, mas as entradas são sempre públicas.
+ * Maps data to a curve point whose discrete logarithm nobody knows (try-and-increment).
+ * Used for "nothing up my sleeve" generators and key images.
+ * Not constant-time, but the inputs are always public.
  */
 export function hashToPoint(domain, ...parts) {
   for (let ctr = 0; ctr < 256; ctr++) {
@@ -380,10 +380,10 @@ export function hashToPoint(domain, ...parts) {
     if (y === null) continue;
     return Point.fromAffine(x, (y & 1n) ? P - y : y);
   }
-  throw new Error('hashToPoint falhou'); // probabilidade ~2^-256
+  throw new Error('hashToPoint failed'); // probability ~2^-256
 }
 
-/** Soma de vários pontos. */
+/** Sum of several points. */
 export function sumPoints(points) {
   let acc = JINF;
   for (const p of points) acc = jadd(acc, p.j);

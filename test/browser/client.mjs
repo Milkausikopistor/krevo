@@ -1,6 +1,6 @@
-// Cliente rodado no ambiente "de navegador" (ver register.mjs): restaura uma carteira leve,
-// sincroniza (varredura + provas com PoW), mostra o saldo e envia — tudo com as peças do app web.
-//   node --import ./test/browser/register.mjs test/browser/client.mjs <servidor> <rede> <frase> [destino valor de]
+// Client run in the "browser" environment (see register.mjs): restores a light wallet,
+// syncs (scan + proofs with PoW), shows the balance and sends — all with the web app's pieces.
+//   node --import ./test/browser/register.mjs test/browser/client.mjs <server> <network> <phrase> [destination amount from]
 import nodeCryptoProbe from 'node:crypto';
 import { getParams } from '../../src/params.js';
 import { LightWallet } from '../../src/light/wallet.js';
@@ -9,8 +9,8 @@ import { createHash } from '../../src/web/shims/crypto.js';
 const [server, net, phrase, to, amount, from, mode] = process.argv.slice(2);
 const out = {
   env: {
-    webBuffer: Buffer.name === 'Buffer' && !('poolSize' in Buffer), // o Buffer do Node tem poolSize; o nosso não
-    nodeCryptoInTest: typeof nodeCryptoProbe.createHash === 'function', // o próprio teste ainda vê o node:crypto real
+    webBuffer: Buffer.name === 'Buffer' && !('poolSize' in Buffer), // Node's Buffer has poolSize; ours does not
+    nodeCryptoInTest: typeof nodeCryptoProbe.createHash === 'function', // the test itself still sees the real node:crypto
   },
 };
 const params = getParams(net);
@@ -24,7 +24,7 @@ out.address = w.sAddress;
 out.memos = w.history().received.map((r) => r.memo).filter(Boolean);
 out.blakeIsShim = createHash('blake2b512').update('x').digest('hex').length === 128;
 if (mode === 'fcmp') {
-  process.env.KREVO_NO_THREADS = '1'; // como no navegador: sem threads nem provador nativo, prova em sequência
+  process.env.KREVO_NO_THREADS = '1'; // as in the browser: no threads nor native prover, the proof is sequential
   process.env.KREVO_NO_NATIVE = '1';
   w.privateInputs = 'fcmp';
 }

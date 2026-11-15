@@ -1,13 +1,13 @@
-//! Aritmética de curva em TEMPO CONSTANTE para operações com segredos.
+//! CONSTANT-TIME curve arithmetic for operations with secrets.
 //!
-//! O código de verificação (dados públicos) usa as rotinas rápidas de `curve.rs`, que têm
-//! desvios e acessos à memória dependentes dos dados. Aqui não: nada depende do escalar
-//! secreto além dos próprios valores calculados.
-//!   • coordenadas projetivas (X:Y:Z) com as fórmulas COMPLETAS de Renes–Costello–Batina
-//!     (2016, alg. 7 e 9, a = 0): sem casos especiais para identidade, dobra ou P + (−P);
-//!   • multiplicação em janelas fixas de 4 bits: sempre 4 dobras + 1 soma por janela;
-//!   • consulta de tabela que percorre TODAS as entradas e escolhe por máscara;
-//!   • escalares em Montgomery sem desvios (field.rs).
+//! The verification code (public data) uses the fast routines of `curve.rs`, which have
+//! data-dependent branches and memory accesses. Not here: nothing depends on the secret
+//! scalar beyond the computed values themselves.
+//!   • projective coordinates (X:Y:Z) with the COMPLETE formulas of Renes–Costello–Batina
+//!     (2016, alg. 7 and 9, a = 0): no special cases for the identity, doubling or P + (−P);
+//!   • multiplication in fixed 4-bit windows: always 4 doublings + 1 addition per window;
+//!   • table lookup that walks ALL entries and picks by mask;
+//!   • scalars in Montgomery form without branching (field.rs).
 
 use crate::curve::*;
 use crate::field::*;
@@ -17,14 +17,14 @@ pub struct PP<C: Curve> { pub x: Base<C>, pub y: Base<C>, pub z: Base<C> }
 
 impl<C: Curve> PP<C> {
     pub fn identity() -> Self { PP { x: Fe::ZERO, y: Fe::ONE, z: Fe::ZERO } }
-    /// A partir de um ponto (Jacobiano) — usado com pontos PÚBLICOS (bases).
+    /// From a (Jacobian) point — used with PUBLIC points (bases).
     pub fn from_pt(p: &Pt<C>) -> Self {
         match p.affine() { Some((x, y)) => PP { x, y, z: Fe::ONE }, None => Self::identity() }
     }
     #[inline(always)]
     fn b3() -> Base<C> { Fe::from_limbs([21, 0, 0, 0]) }
 
-    /// Soma completa (alg. 7, a = 0, b3 = 3·7).
+    /// Complete addition (alg. 7, a = 0, b3 = 3·7).
     pub fn add(&self, q: &Self) -> Self {
         let b3 = Self::b3();
         let (x1, y1, z1, x2, y2, z2) = (self.x, self.y, self.z, q.x, q.y, q.z);
@@ -64,7 +64,7 @@ impl<C: Curve> PP<C> {
         PP { x: x3, y: y3, z: z3 }
     }
 
-    /// Dobra completa (alg. 9, a = 0).
+    /// Complete doubling (alg. 9, a = 0).
     pub fn dbl(&self) -> Self {
         let b3 = Self::b3();
         let (x, y, z) = (self.x, self.y, self.z);
@@ -96,7 +96,7 @@ impl<C: Curve> PP<C> {
         PP { x: Fe::select(&a.x, &b.x, mask), y: Fe::select(&a.y, &b.y, mask), z: Fe::select(&a.z, &b.z, mask) }
     }
 
-    /// De volta a um ponto comum (inversão de Fermat: expoente público, tempo constante).
+    /// Back to an ordinary point (Fermat inversion: public exponent, constant time).
     pub fn to_pt(&self) -> Pt<C> {
         let zi = self.z.invert();
         let inf = self.z.ct_eq(&Fe::ZERO);
@@ -105,7 +105,7 @@ impl<C: Curve> PP<C> {
     }
 }
 
-/// Consulta tbl[idx] percorrendo todas as entradas (sem acesso dependente do segredo).
+/// Looks up tbl[idx] walking all entries (no secret-dependent access).
 #[inline(always)]
 fn lookup<C: Curve>(tbl: &[PP<C>], idx: u64) -> PP<C> {
     let mut r = PP::identity();
@@ -119,7 +119,7 @@ fn lookup<C: Curve>(tbl: &[PP<C>], idx: u64) -> PP<C> {
 #[inline(always)]
 fn nibble(k: &[u64; 4], i: usize) -> u64 { (k[i / 16] >> (4 * (i % 16))) & 15 }
 
-/// k·P em tempo constante (P público, k secreto).
+/// k·P in constant time (public P, secret k).
 pub fn ct_mul<C: Curve>(p: &Pt<C>, k: &Scalar<C>) -> Pt<C> { ct_mul_pp(&PP::from_pt(p), k).to_pt() }
 
 pub fn ct_mul_pp<C: Curve>(p: &PP<C>, k: &Scalar<C>) -> PP<C> {
@@ -135,7 +135,7 @@ pub fn ct_mul_pp<C: Curve>(p: &PP<C>, k: &Scalar<C>) -> PP<C> {
     acc
 }
 
-/// Base fixa em tempo constante: 64 janelas × 16 múltiplos pré-calculados, uma soma por janela.
+/// Fixed base in constant time: 64 windows × 16 precomputed multiples, one addition per window.
 pub struct CtFixed<C: Curve> { tbl: Vec<[PP<C>; 16]> }
 
 impl<C: Curve> CtFixed<C> {
@@ -145,7 +145,7 @@ impl<C: Curve> CtFixed<C> {
         for _ in 0..64 {
             let mut row = [PP::identity(); 16];
             for d in 1..16 { row[d] = row[d - 1].add(&base); }
-            // normaliza para Z = 1 (pontos públicos)
+            // normalizes to Z = 1 (public points)
             for d in 1..16 { row[d] = PP::from_pt(&row[d].to_pt()); }
             tbl.push(row);
             base = base.dbl().dbl().dbl().dbl();
@@ -160,8 +160,8 @@ impl<C: Curve> CtFixed<C> {
     }
 }
 
-/// Σ ks[i]·ps[i] em tempo constante (Straus, janelas de 4 bits, consultas mascaradas).
-/// Para compromissos de provas com testemunhas secretas.
+/// Σ ks[i]·ps[i] in constant time (Straus, 4-bit windows, masked lookups).
+/// For proof commitments with secret witnesses.
 pub fn ct_msm<C: Curve>(ks: &[Scalar<C>], ps: &[Pt<C>]) -> Pt<C> {
     assert_eq!(ks.len(), ps.len());
     let aff = batch_affine(ps);
@@ -190,7 +190,7 @@ mod tests {
         let g = Pt::<C>::hash_to_point(|c| H::new("ct").b(&c.to_le_bytes()).d32());
         let ks: Vec<Scalar<C>> = vec![Fe::ZERO, Fe::ONE, -Fe::ONE, Fe::from_u64(15), Fe::from_u64(16), Fe::random(), Fe::random()];
         for k in &ks { assert!(ct_mul(&g, k).eq(&g.mul(k)), "{} k·G", C::NAME); }
-        // fórmulas completas: P + P, P + (−P), P + O
+        // complete formulas: P + P, P + (−P), P + O
         let p = PP::from_pt(&g);
         assert!(p.add(&p).to_pt().eq(&g.dbl()));
         assert!(p.add(&p.neg()).to_pt().is_inf());

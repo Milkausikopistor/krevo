@@ -1,8 +1,8 @@
-//! Corpos primos de 256 bits em forma de Montgomery (4 limbs de 64 bits).
+//! 256-bit prime fields in Montgomery form (4 limbs of 64 bits).
 //!
-//! Dois módulos bastam para tudo: p (campo de secp256k1 = ordem de secq256k1) e
-//! n (ordem de secp256k1 = campo de secq256k1). Os valores ficam sempre reduzidos
-//! (< módulo), então a representação é única e a igualdade é por limbs.
+//! Two moduli are enough for everything: p (secp256k1's field = secq256k1's order) and
+//! n (secp256k1's order = secq256k1's field). Values are always kept reduced
+//! (< modulus), so the representation is unique and equality is by limbs.
 
 use num_bigint::BigUint;
 use std::fmt;
@@ -12,11 +12,11 @@ pub trait Modulus: Copy + Clone + Send + Sync + 'static + fmt::Debug + PartialEq
     const M: [u64; 4];
     /// −M⁻¹ mod 2⁶⁴
     const INV: u64;
-    /// 2²⁵⁶ mod M (o "1" em Montgomery)
+    /// 2²⁵⁶ mod M (the "1" in Montgomery form)
     const R: [u64; 4];
     /// 2⁵¹² mod M
     const R2: [u64; 4];
-    /// não-resíduo quadrático (para Tonelli–Shanks quando M ≡ 1 mod 4)
+    /// quadratic non-residue (for Tonelli–Shanks when M ≡ 1 mod 4)
     const NONRES: u64;
 }
 
@@ -56,7 +56,7 @@ fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
     (t as u64, ((t >> 64) as u64) & 1)
 }
 
-/// a − b em 256 bits; devolve (diferença, borrow).
+/// a − b in 256 bits; returns (difference, borrow).
 #[inline(always)]
 pub fn sub4(a: &[u64; 4], b: &[u64; 4]) -> ([u64; 4], u64) {
     let (r0, c) = sbb(a[0], b[0], 0);
@@ -73,16 +73,16 @@ pub fn add4(a: &[u64; 4], b: &[u64; 4]) -> ([u64; 4], u64) {
     let (r3, c) = adc(a[3], b[3], c);
     ([r0, r1, r2, r3], c)
 }
-/// 1 se x ≠ 0, senão 0 — sem desvio.
+/// 1 if x ≠ 0, otherwise 0 — without branching.
 #[inline(always)]
 pub fn nonzero_bit(x: u64) -> u64 { (x | x.wrapping_neg()) >> 63 }
-/// Bit (0/1) → máscara (0/!0) atrás de uma BARREIRA de otimização. Sem ela, o LLVM percebe que a
-/// máscara só pode ser 0 ou !0 e troca a seleção por um desvio condicional — que o preditor de
-/// desvios aprende, e o tempo passa a depender do segredo. A medição estatística (ct_timing_test)
-/// pegou exatamente isso na consulta de tabela da multiplicação por escalar.
+/// Bit (0/1) → mask (0/!0) behind an optimization BARRIER. Without it, LLVM notices that the
+/// mask can only be 0 or !0 and replaces the selection with a conditional branch — which the branch
+/// predictor learns, and the timing starts to depend on the secret. The statistical measurement (ct_timing_test)
+/// caught exactly that in the table lookup of scalar multiplication.
 #[inline(always)]
 pub fn ct_mask(bit: u64) -> u64 { std::hint::black_box(bit).wrapping_neg() }
-/// Seleção sem desvio: mask = 0 → a; mask = !0 → b.
+/// Branch-free selection: mask = 0 → a; mask = !0 → b.
 #[inline(always)]
 pub fn sel4(a: &[u64; 4], b: &[u64; 4], mask: u64) -> [u64; 4] {
     [(a[0] & !mask) | (b[0] & mask), (a[1] & !mask) | (b[1] & mask), (a[2] & !mask) | (b[2] & mask), (a[3] & !mask) | (b[3] & mask)]
@@ -144,28 +144,28 @@ impl<M: Modulus> Fe<M> {
         }
         let low = [t[0], t[1], t[2], t[3]];
         let (r, borrow) = sub4(&low, m);
-        // tempo constante: escolhe sem desvio entre low e low − M
+        // constant time: picks without branching between low and low − M
         let use_r = nonzero_bit(t[4]) | (borrow ^ 1);
         sel4(&low, &r, ct_mask(use_r))
     }
 
-    /// Inteiro canônico (< 2²⁵⁶, qualquer) → elemento (reduz módulo M).
+    /// Canonical integer (< 2²⁵⁶, any) → element (reduces modulo M).
     pub fn from_limbs(x: [u64; 4]) -> Self {
         Fe(Self::mont_mul(&x, &M::R2), PhantomData)
     }
     pub fn from_u64(v: u64) -> Self { Self::from_limbs([v, 0, 0, 0]) }
-    /// Elemento → inteiro canônico (< M).
+    /// Element → canonical integer (< M).
     pub fn to_limbs(&self) -> [u64; 4] { Self::mont_mul(&self.0, &[1, 0, 0, 0]) }
 
     pub fn from_be_bytes_reduce(b: &[u8; 32]) -> Self { Self::from_limbs(be_to_limbs(b)) }
-    /// Só aceita a codificação canônica (< M).
+    /// Only accepts the canonical encoding (< M).
     pub fn from_be_bytes(b: &[u8]) -> Option<Self> {
         if b.len() != 32 { return None; }
         let l = be_to_limbs(b.try_into().unwrap());
         if !lt4(&l, &M::M) { return None; }
         Some(Self::from_limbs(l))
     }
-    /// 64 bytes big-endian → elemento (512 bits módulo M, como o `% N` do JavaScript).
+    /// 64 big-endian bytes → element (512 bits modulo M, like JavaScript's `% N`).
     pub fn from_be_bytes_wide(b: &[u8; 64]) -> Self {
         let hi = Self::from_limbs(be_to_limbs(b[..32].try_into().unwrap()));
         let lo = Self::from_limbs(be_to_limbs(b[32..].try_into().unwrap()));
@@ -201,7 +201,7 @@ impl<M: Modulus> Fe<M> {
         }
         r
     }
-    /// Inverso (Fermat). Zero → zero.
+    /// Inverse (Fermat). Zero → zero.
     pub fn invert(&self) -> Self {
         let (e, _) = sub4(&M::M, &[2, 0, 0, 0]);
         self.pow_limbs(&e)
@@ -211,7 +211,7 @@ impl<M: Modulus> Fe<M> {
         let (m1, _) = sub4(&M::M, &[1, 0, 0, 0]);
         self.pow_limbs(&shr(&m1, 1)) == Self::ONE
     }
-    /// Raiz quadrada (uma das duas) ou None.
+    /// Square root (one of the two) or None.
     pub fn sqrt(&self) -> Option<Self> {
         if self.is_zero() { return Some(Self::ZERO); }
         if M::M[0] & 3 == 3 {
@@ -244,18 +244,18 @@ impl<M: Modulus> Fe<M> {
         }
         Some(r)
     }
-    /// Máscara !0 se iguais, 0 se diferentes — tempo constante.
+    /// Mask !0 if equal, 0 if different — constant time.
     #[inline(always)]
     pub fn ct_eq(&self, o: &Self) -> u64 {
         let d = (self.0[0] ^ o.0[0]) | (self.0[1] ^ o.0[1]) | (self.0[2] ^ o.0[2]) | (self.0[3] ^ o.0[3]);
         ct_mask(nonzero_bit(d) ^ 1)
     }
-    /// mask = 0 → a; mask = !0 → b (tempo constante).
+    /// mask = 0 → a; mask = !0 → b (constant time).
     #[inline(always)]
     pub fn select(a: &Self, b: &Self, mask: u64) -> Self { Fe(sel4(&a.0, &b.0, mask), PhantomData) }
 
-    /// Raiz quadrada em TEMPO CONSTANTE (para valores secretos): Tonelli–Shanks com número
-    /// fixo de passos e escolhas por máscara. Só o resultado final (existe ou não) é revelado.
+    /// Square root in CONSTANT TIME (for secret values): Tonelli–Shanks with a fixed
+    /// number of steps and choices by mask. Only the final result (exists or not) is revealed.
     pub fn sqrt_ct(&self) -> Option<Self> {
         let r = if M::M[0] & 3 == 3 {
             let (e, _) = add4(&M::M, &[1, 0, 0, 0]);
@@ -263,7 +263,7 @@ impl<M: Modulus> Fe<M> {
         } else {
             let (m1, _) = sub4(&M::M, &[1, 0, 0, 0]);
             let (mut s, mut q) = (0u32, m1);
-            while q[0] & 1 == 0 { q = shr(&q, 1); s += 1; } // depende só do módulo (público)
+            while q[0] & 1 == 0 { q = shr(&q, 1); s += 1; } // depends only on the modulus (public)
             let mut c = Self::from_u64(M::NONRES).pow_limbs(&q);
             let mut t = self.pow_limbs(&q);
             let (q1, _) = add4(&q, &[1, 0, 0, 0]);
@@ -283,7 +283,7 @@ impl<M: Modulus> Fe<M> {
 
     pub fn random() -> Self {
         let mut b = [0u8; 64];
-        getrandom::fill(&mut b).expect("aleatoriedade do sistema");
+        getrandom::fill(&mut b).expect("system randomness");
         Self::from_be_bytes_wide(&b)
     }
 }
@@ -341,7 +341,7 @@ impl<M: Modulus> std::ops::Mul for Fe<M> {
 pub type FeP = Fe<ModP>;
 pub type FeN = Fe<ModN>;
 
-/// Inversão de muitos elementos com uma só inversão (truque de Montgomery). Zeros ficam zero.
+/// Inversion of many elements with a single inversion (Montgomery's trick). Zeros stay zero.
 pub fn batch_invert<M: Modulus>(v: &mut [Fe<M>]) {
     let mut acc = Vec::with_capacity(v.len());
     let mut run = Fe::<M>::ONE;
@@ -380,10 +380,10 @@ mod tests {
             assert_eq!((fa - fb).to_biguint(), ((&a + &m) - &b) % &m);
             if !fa.is_zero() { assert_eq!((fa * fa.invert()), Fe::<M>::ONE); }
             let sq = fa.square();
-            let r = sq.sqrt().expect("quadrado tem raiz");
+            let r = sq.sqrt().expect("a square has a root");
             assert_eq!(r.square(), sq);
         }
-        // extremos
+        // extremes
         let mm1 = Fe::<M>::from_biguint(&(&m - 1u32));
         assert_eq!((mm1 + Fe::<M>::ONE), Fe::<M>::ZERO);
         assert_eq!((mm1 * mm1), Fe::<M>::ONE);

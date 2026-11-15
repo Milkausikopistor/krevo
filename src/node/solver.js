@@ -1,9 +1,9 @@
-// Resolve a prova de trabalho de um modelo de bloco (minerador de CPU simples).
+// Solves the proof of work of a block template (simple CPU miner).
 import { PowState, compactToTarget, targetToLE, hashMeetsTarget } from '../consensus/pow.js';
 
 /**
- * Procura um nonce. Retorna true se achou (e grava no cabeçalho), false se
- * esgotou `maxTries` ou `shouldStop()` pediu parada.
+ * Looks for a nonce. Returns true if it found one (and writes it into the header), false if
+ * `maxTries` ran out or `shouldStop()` asked to stop.
  */
 export function solve(block, { startNonce = 0n, maxTries = Infinity, shouldStop = null, state = null } = {}) {
   const h = block.header;

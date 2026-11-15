@@ -1,13 +1,13 @@
-// Provas FCMP: a parte cara são as duas provas Bulletproofs de cada entrada (uma sobre cada
-// curva). Ordem de preferência:
-//   1. provador NATIVO em Rust (`krevod provar`), se existir — ~10–20× mais rápido;
-//      KREVO_PROVER=/caminho/krevod, ou o binário compilado em rust/krevod/target/{release,debug}
-//   2. o núcleo em Rust compilado para WebAssembly (src/crypto/wasm.js) — no Node, uma thread por
-//      metade de cada entrada; no navegador, em sequência. Tempo constante nos segredos (r1, r2).
-//   3. JavaScript puro: threads (Node) ou em sequência (KREVO_NO_WASM / sem WebAssembly).
-// Todos produzem provas no mesmo formato, verificadas pelas mesmas regras. A prova de posse
-// final (com a chave de gasto) é feita neste processo — pelo núcleo WebAssembly quando
-// disponível: a chave de gasto nunca sai daqui.
+// FCMP proofs: the expensive part is each input's two Bulletproofs (one over each
+// curve). Order of preference:
+//   1. the NATIVE Rust prover (`krevod prove`), if present — ~10–20× faster;
+//      KREVO_PROVER=/path/krevod, or the binary built in rust/krevod/target/{release,debug}
+//   2. the Rust core compiled to WebAssembly (src/crypto/wasm.js) — in Node, one thread per
+//      half of each input; in the browser, sequentially. Constant time on the secrets (r1, r2).
+//   3. pure JavaScript: threads (Node) or sequentially (KREVO_NO_WASM / no WebAssembly).
+// All produce proofs in the same format, verified by the same rules. The final ownership
+// proof (with the spend key) is made in this process — by the WebAssembly core when
+// available: the spend key never leaves here.
 
 import { fcmpPrepare, newBlinds, setupFor, finishPrep } from './fcmp.js';
 import { exportGens } from './bp.js';
@@ -29,9 +29,9 @@ async function threads() {
   return wt;
 }
 
-// ------------------------------------------------------------------ provador nativo
+// ------------------------------------------------------------------ native prover
 let native;
-/** Caminho do provador nativo, ou null. */
+/** Path of the native prover, or null. */
 export async function nativeProver() {
   if (native !== undefined) return native;
   native = null;
@@ -60,7 +60,7 @@ async function proveNative(bin, jobs) {
     })),
   });
   return new Promise((ok, fail) => {
-    const p = spawn(bin, ['provar'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn(bin, ['prove'], { stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '', err = '';
     p.stdout.on('data', (d) => { out += d; });
     p.stderr.on('data', (d) => { err += d; });
@@ -70,13 +70,13 @@ async function proveNative(bin, jobs) {
         const r = JSON.parse(out);
         if (r.error) return fail(new Error('provador nativo: ' + r.error));
         ok(r.proofs.map((x) => ({ head: Buffer.from(x.head, 'hex'), bps: Buffer.concat([Buffer.from(x.E1, 'hex'), Buffer.from(x.E2, 'hex')]) })));
-      } catch { fail(new Error('provador nativo: resposta inválida ' + (err || out).slice(0, 200))); }
+      } catch { fail(new Error('native prover: invalid response ' + (err || out).slice(0, 200))); }
     });
     p.stdin.end(req);
   });
 }
 
-// ------------------------------------------------------------------ threads JavaScript
+// ------------------------------------------------------------------ JavaScript threads
 const MAX_THREADS = 8;
 let running = 0;
 const waiting = [];
@@ -94,17 +94,17 @@ async function runHalf(w, job, half, gens, wasmJob) {
       const worker = new w.Worker(new URL('./worker.js', import.meta.url), { workerData: { job, half, gens, wasmJob } });
       worker.once('message', (m) => (m.error ? fail(new Error(m.error)) : ok(Buffer.from(m.proof))));
       worker.once('error', fail);
-      worker.once('exit', (code) => { if (code !== 0) fail(new Error(`thread de prova saiu com código ${code}`)); });
+      worker.once('exit', (code) => { if (code !== 0) fail(new Error(`proving thread exited with code ${code}`)); });
     });
   } finally { release(); }
 }
 
 const bytes = (p) => (Buffer.isBuffer(p) || p instanceof Uint8Array ? Buffer.from(p) : p.toBytes());
 
-/** Qual provador foi usado na última preparação ('nativo' | 'wasm-threads' | 'wasm' | 'threads' | 'sequencial'). */
+/** Which prover was used in the last preparation ('native' | 'wasm-threads' | 'wasm' | 'threads' | 'sequential'). */
 export let lastProver = null;
 
-/** Monta o "preparo" a partir do cabeçalho calculado em Rust (nativo ou WebAssembly). */
+/** Builds the "preparation" from the header computed in Rust (native or WebAssembly). */
 function fromHead(a, blinds, head, bps) {
   const st = { Phat: E1.fromBytes(head.subarray(0, 33)), Ihat: E1.fromBytes(head.subarray(33, 66)), Chat: E1.fromBytes(head.subarray(66, 99)) };
   const P = a.P instanceof Point ? a.P : Point.fromBytes(a.P);
@@ -112,25 +112,25 @@ function fromHead(a, blinds, head, bps) {
 }
 
 /**
- * Parte cara das provas de várias entradas. argsList: [{ branch, N, path, leafPos, P, C }].
- * Devolve os "preparos" para fcmpFinish (que prende cada prova à transação).
+ * Expensive part of the proofs of several inputs. argsList: [{ branch, N, path, leafPos, P, C }].
+ * Returns the "preparations" for fcmpFinish (which binds each proof to the transaction).
  */
 export async function fcmpPrepareMany(argsList) {
   const jobs = argsList.map((a) => ({ a, blinds: newBlinds() }));
   const bin = await nativeProver();
   if (bin) {
     try {
-      // o Rust devolve também o cabeçalho (P̂, Î, Ĉ, L̂, nós cegados): nada a recalcular aqui
+      // Rust also returns the header (P̂, Î, Ĉ, L̂, blinded nodes): nothing to recompute here
       const res = await proveNative(bin, jobs);
-      lastProver = 'nativo';
+      lastProver = 'native';
       return jobs.map(({ a, blinds }, i) => fromHead(a, blinds, res[i].head, res[i].bps));
-    } catch { /* segue para o WebAssembly ou o JavaScript */ }
+    } catch { /* fall through to WebAssembly or JavaScript */ }
   }
   const w = await threads();
   if (core.available()) {
     const cj = jobs.map(({ a, blinds }) => core.fcmpJob({ ...a, P: bytes(a.P), C: bytes(a.C) }, blinds));
     if (w) {
-      const heads = cj.map((j) => core.fcmpHead(j)); // valida o caminho antes de gastar CPU
+      const heads = cj.map((j) => core.fcmpHead(j)); // validates the path before spending CPU
       const halves = await Promise.all(cj.map((j) => Promise.all([runHalf(w, null, 'E1', null, j), runHalf(w, null, 'E2', null, j)])));
       lastProver = 'wasm-threads';
       return jobs.map(({ a, blinds }, i) => fromHead(a, blinds, heads[i], Buffer.concat(halves[i])));
@@ -138,9 +138,9 @@ export async function fcmpPrepareMany(argsList) {
     lastProver = 'wasm';
     return jobs.map(({ a, blinds }, i) => { const r = core.fcmpPrepare(cj[i]); return fromHead(a, blinds, r.head, r.bps); });
   }
-  if (!w) { lastProver = 'sequencial'; return argsList.map((a, i) => fcmpPrepare(a, jobs[i].blinds)); }
-  const setups = jobs.map(({ a, blinds }) => setupFor(a, blinds)); // valida o caminho antes de gastar CPU
-  const gens = { E1: exportGens(E1), E2: exportGens(E2) };         // o que já estiver calculado vai junto
+  if (!w) { lastProver = 'sequential'; return argsList.map((a, i) => fcmpPrepare(a, jobs[i].blinds)); }
+  const setups = jobs.map(({ a, blinds }) => setupFor(a, blinds)); // validates the path before spending CPU
+  const gens = { E1: exportGens(E1), E2: exportGens(E2) };         // whatever is already computed goes along
   const halves = await Promise.all(jobs.map(({ a, blinds }) => {
     const job = { branch: a.branch, N: a.N, path: a.path, leafPos: a.leafPos, P: bytes(a.P), C: bytes(a.C), r1: blinds.r1, r2: blinds.r2 };
     return Promise.all([runHalf(w, job, 'E1', gens), runHalf(w, job, 'E2', gens)]);

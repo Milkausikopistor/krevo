@@ -1,21 +1,21 @@
-//! Cofre de segredos da carteira.
+//! Wallet secret vault.
 //!
-//! A semente de 32 bytes entra aqui UMA vez; dela saem a chave de gasto b, a de visualização a e
-//! todas as chaves derivadas (transparentes, quânticas, de multiassinatura, de troca, de uso único
-//! das saídas privadas) — mas nenhuma delas sai. O JavaScript recebe uma "alça" (número) e pede
-//! operações: chave pública, assinatura, imagem de chave, CLSAG, prova de posse da FCMP, DLEQ da
-//! prova de reservas, ECDSA para o Bitcoin. Exportar a chave de visualização é uma operação
-//! explícita (o usuário pede).
+//! The 32-byte seed enters here ONCE; from it come the spend key b, the view key a and
+//! all derived keys (transparent, quantum-safe, multisig, swap, one-time keys of the
+//! private outputs) — but none of them leaves. JavaScript gets a "handle" (a number) and asks for
+//! operations: public key, signature, key image, CLSAG, FCMP ownership proof, the proof of
+//! reserves DLEQ, ECDSA for Bitcoin. Exporting the view key is an explicit operation
+//! (the user asks for it).
 //!
-//! Derivações idênticas às de src/wallet/keys.js e src/crypto/stealth.js (conferidas nos testes):
+//! Derivations identical to those of src/wallet/keys.js and src/crypto/stealth.js (checked in the tests):
 //!   b = Hs("wallet/spend", s)   a = Hs("wallet/view", s)   x_t(i) = Hs("wallet/t", s, i)
 //!   x_q(i) = Hs("wallet/q", s, i)   ML-DSA(i) = H("wallet/mldsa", s, i)   x_ms = Hs("wallet/multisig", s)
-//!   troca: Hs("wallet/swap/krv"|"wallet/swap/btc", s, i), segredo H("wallet/swap/secret", s, i)
-//!   saída: p = k + b + m_sub, m_0 = 0, m_i = Hs("stealth/subaddr", a, i); k vem da varredura
+//!   swap: Hs("wallet/swap/krv"|"wallet/swap/btc", s, i), secret H("wallet/swap/secret", s, i)
+//!   output: p = k + b + m_sub, m_0 = 0, m_i = Hs("stealth/subaddr", a, i); k comes from scanning
 //!
-//! Formato binário da chamada: alça (u32 LE) ‖ dados da operação. Descritor de chave:
-//!   [1|2|3|4|5|7] ‖ índice u32 LE   (t, q, multisig, troca-krv, troca-btc, gasto)
-//!   [6] ‖ sub u32 LE ‖ k (32)        (chave de uso único de uma saída privada)
+//! Binary call format: handle (u32 LE) ‖ operation data. Key descriptor:
+//!   [1|2|3|4|5|7] ‖ index u32 LE   (t, q, multisig, swap-krv, swap-btc, spend)
+//!   [6] ‖ sub u32 LE ‖ k (32)        (one-time key of a private output)
 
 use crate::crypto::*;
 use crate::ct::ct_mul;
@@ -38,24 +38,24 @@ impl Drop for Vault {
 #[derive(Clone, Copy)]
 enum Desc { T(u32), Q(u32), Ms, SwapKrv(u32), SwapBtc(u32), Spend, Out { k: Sc, sub: u32 } }
 
-fn u32le(b: &[u8]) -> Result<u32, String> { Ok(u32::from_le_bytes(b.get(..4).ok_or("entrada curta")?.try_into().unwrap())) }
-fn sc(b: &[u8]) -> Result<Sc, String> { Sc::from_be_bytes(b.get(..32).ok_or("entrada curta")?).ok_or_else(|| "escalar fora do intervalo".into()) }
-fn pt(b: &[u8]) -> Result<P1, String> { P1::from_bytes(b.get(..33).ok_or("entrada curta")?).ok_or_else(|| "ponto inválido".into()) }
+fn u32le(b: &[u8]) -> Result<u32, String> { Ok(u32::from_le_bytes(b.get(..4).ok_or("short input")?.try_into().unwrap())) }
+fn sc(b: &[u8]) -> Result<Sc, String> { Sc::from_be_bytes(b.get(..32).ok_or("short input")?).ok_or_else(|| "scalar out of range".into()) }
+fn pt(b: &[u8]) -> Result<P1, String> { P1::from_bytes(b.get(..33).ok_or("short input")?).ok_or_else(|| "invalid point".into()) }
 
-/// Lê um descritor; devolve (descritor, bytes consumidos).
+/// Reads a descriptor; returns (descriptor, bytes consumed).
 fn desc(b: &[u8]) -> Result<(Desc, usize), String> {
-    let kind = *b.first().ok_or("descritor ausente")?;
+    let kind = *b.first().ok_or("missing descriptor")?;
     let i = u32le(&b[1..])?;
     Ok(match kind {
         1 => (Desc::T(i), 5), 2 => (Desc::Q(i), 5), 3 => (Desc::Ms, 5), 4 => (Desc::SwapKrv(i), 5), 5 => (Desc::SwapBtc(i), 5), 7 => (Desc::Spend, 5),
-        6 => (Desc::Out { k: sc(b.get(5..).ok_or("entrada curta")?)?, sub: i }, 37),
-        _ => return Err("descritor de chave desconhecido".into()),
+        6 => (Desc::Out { k: sc(b.get(5..).ok_or("short input")?)?, sub: i }, 37),
+        _ => return Err("unknown key descriptor".into()),
     })
 }
 
 impl Vault {
     pub fn new(seed: &[u8]) -> Result<Self, String> {
-        let seed: [u8; 32] = seed.get(..32).ok_or("semente precisa de 32 bytes")?.try_into().unwrap();
+        let seed: [u8; 32] = seed.get(..32).ok_or("the seed must have 32 bytes")?.try_into().unwrap();
         let b = hash_to_scalar(H::new("wallet/spend").b(&seed));
         let a = hash_to_scalar(H::new("wallet/view").b(&seed));
         Ok(Vault { seed, b, a, bpub: mul_g_ct(&b) })
@@ -77,23 +77,23 @@ impl Vault {
             Desc::Spend => self.b,
             Desc::Out { k, sub } => k + self.b + self.sub_scalar(sub),
         };
-        if x.is_zero() { return Err("chave zero".into()); }
+        if x.is_zero() { return Err("zero key".into()); }
         Ok(x)
     }
     fn mldsa_seed(&self, i: u32) -> [u8; 32] { H::new("wallet/mldsa").b(&self.seed).n(i as u64).d32() }
-    /// Chave de uso único de uma saída, conferida contra o P publicado.
+    /// One-time key of an output, checked against the published P.
     fn out_key(&self, d: &Desc, p: &P1) -> Result<Sc, String> {
-        if !matches!(d, Desc::Out { .. }) { return Err("operação só para chaves de saídas privadas".into()); }
+        if !matches!(d, Desc::Out { .. }) { return Err("operation only for private output keys".into()); }
         let x = self.secret(d)?;
-        if !mul_g_ct(&x).eq(p) { return Err("a chave não corresponde à saída".into()); }
+        if !mul_g_ct(&x).eq(p) { return Err("the key does not match the output".into()); }
         Ok(x)
     }
 
     pub fn call(&self, op: u32, i: &[u8]) -> Result<Vec<u8>, String> {
         match op {
-            // chave pública de um descritor
+            // public key of a descriptor
             22 => { let (d, _) = desc(i)?; Ok(mul_g_ct(&self.secret(&d)?).to_bytes().to_vec()) }
-            // subendereço i: D ‖ C
+            // subaddress i: D ‖ C
             23 => {
                 let n = u32le(i)?;
                 let m = self.sub_scalar(n);
@@ -101,103 +101,103 @@ impl Vault {
                 let c = ct_mul(&d, &self.a);
                 Ok([d.to_bytes(), c.to_bytes()].concat())
             }
-            // exportar a chave de visualização (pedido explícito do usuário): a ‖ B
+            // export the view key (explicit user request): a ‖ B
             24 => Ok([self.a.to_be_bytes().to_vec(), self.bpub.to_bytes().to_vec()].concat()),
-            // segredos compartilhados a·R de várias saídas (varredura)
+            // shared secrets a·R of several outputs (scanning)
             25 => {
-                if i.len() % 33 != 0 { return Err("entrada inválida".into()); }
+                if i.len() % 33 != 0 { return Err("invalid input".into()); }
                 let mut out = Vec::with_capacity(i.len());
                 for c in i.chunks(33) { out.extend_from_slice(&ct_mul(&pt(c)?, &self.a).to_bytes()); }
                 Ok(out)
             }
-            // Schnorr: descritor ‖ len ‖ domínio ‖ mensagem
+            // Schnorr: descriptor ‖ len ‖ domain ‖ message
             26 => {
                 let (d, o) = desc(i)?;
-                if !matches!(d, Desc::T(_) | Desc::Q(_) | Desc::Ms | Desc::SwapKrv(_)) { return Err("esta chave não assina Schnorr".into()); }
-                let dl = *i.get(o).ok_or("entrada curta")? as usize;
-                let dom = std::str::from_utf8(i.get(o + 1..o + 1 + dl).ok_or("entrada curta")?).map_err(|_| "domínio inválido")?;
+                if !matches!(d, Desc::T(_) | Desc::Q(_) | Desc::Ms | Desc::SwapKrv(_)) { return Err("this key does not sign Schnorr".into()); }
+                let dl = *i.get(o).ok_or("short input")? as usize;
+                let dom = std::str::from_utf8(i.get(o + 1..o + 1 + dl).ok_or("short input")?).map_err(|_| "invalid domain")?;
                 Ok(schnorr_sign(&self.secret(&d)?, &i[o + 1 + dl..], dom)?.to_vec())
             }
-            // ML-DSA-44: chave pública / assinatura do índice i
+            // ML-DSA-44: public key / signature of index i
             27 => Ok(mldsa_key(&self.mldsa_seed(u32le(i)?)).0),
             28 => { let n = u32le(i)?; mldsa_sign(&self.mldsa_seed(n), &i[4..]) }
-            // imagem de chave: descritor(saída) ‖ P
+            // key image: descriptor(output) ‖ P
             29 => { let (d, o) = desc(i)?; let p = pt(&i[o..])?; Ok(key_image(&self.out_key(&d, &p)?, &p).to_bytes().to_vec()) }
-            // CLSAG: descritor ‖ pi u32 ‖ z ‖ pseudo ‖ n u32 ‖ n × (P ‖ C) ‖ mensagem
+            // CLSAG: descriptor ‖ pi u32 ‖ z ‖ pseudo ‖ n u32 ‖ n × (P ‖ C) ‖ message
             30 => {
                 let (d, mut o) = desc(i)?;
                 let pi = u32le(&i[o..])? as usize; o += 4;
                 let z = sc(&i[o..])?; o += 32;
                 let pseudo = pt(&i[o..])?; o += 33;
                 let n = u32le(&i[o..])? as usize; o += 4;
-                if n == 0 || n > 1024 || pi >= n { return Err("anel inválido".into()); }
+                if n == 0 || n > 1024 || pi >= n { return Err("invalid ring".into()); }
                 let mut ring = Vec::with_capacity(n);
                 for _ in 0..n { ring.push(RingMember { p: pt(&i[o..])?, c: pt(&i[o + 33..])? }); o += 66; }
                 let p = self.out_key(&d, &ring[pi].p)?;
                 clsag_sign(&i[o..], &ring, &pseudo, pi, &p, &z)
             }
-            // prova de posse da FCMP: descritor ‖ ctx ‖ P̂ ‖ Î ‖ D ‖ P ‖ r1 ‖ (x − máscara)
+            // FCMP ownership proof: descriptor ‖ ctx ‖ P̂ ‖ Î ‖ D ‖ P ‖ r1 ‖ (x − mask)
             31 => {
                 let (d, mut o) = desc(i)?;
-                let ctx: [u8; 32] = i.get(o..o + 32).ok_or("entrada curta")?.try_into().unwrap(); o += 32;
+                let ctx: [u8; 32] = i.get(o..o + 32).ok_or("short input")?.try_into().unwrap(); o += 32;
                 let (phat, ihat, dd, p) = (pt(&i[o..])?, pt(&i[o + 33..])?, pt(&i[o + 66..])?, pt(&i[o + 99..])?); o += 132;
                 let (r1, aw) = (sc(&i[o..])?, sc(&i[o + 32..])?);
                 let x = self.out_key(&d, &p)?;
                 gsp_prove(&ctx, &phat, &ihat, &dd, [x, r1, x * x, x * r1, aw, r1])
             }
-            // DLEQ da prova de reservas: descritor ‖ P ‖ I ‖ ctx → c ‖ s
+            // proof of reserves DLEQ: descriptor ‖ P ‖ I ‖ ctx → c ‖ s
             32 => {
                 let (d, o) = desc(i)?;
                 let (p, ki) = (pt(&i[o..])?, pt(&i[o + 33..])?);
-                let ctx = i.get(o + 66..o + 98).ok_or("entrada curta")?;
+                let ctx = i.get(o + 66..o + 98).ok_or("short input")?;
                 dleq_prove(&self.out_key(&d, &p)?, &p, &ki, ctx)
             }
-            // ECDSA (RFC 6979, S baixo) para o Bitcoin: descritor(troca-btc) ‖ hash → r ‖ s
+            // ECDSA (RFC 6979, low S) for Bitcoin: descriptor(swap-btc) ‖ hash → r ‖ s
             33 => {
                 let (d, o) = desc(i)?;
-                if !matches!(d, Desc::SwapBtc(_)) { return Err("esta chave não assina ECDSA".into()); }
-                let h: [u8; 32] = i.get(o..o + 32).ok_or("entrada curta")?.try_into().unwrap();
+                if !matches!(d, Desc::SwapBtc(_)) { return Err("this key does not sign ECDSA".into()); }
+                let h: [u8; 32] = i.get(o..o + 32).ok_or("short input")?.try_into().unwrap();
                 ecdsa_sign(&self.secret(&d)?, &h)
             }
-            // valores derivados que PODEM sair (lista fechada): 1 = sal de nome, 2 = segredo de troca
+            // derived values that MAY leave (closed list): 1 = name salt, 2 = swap secret
             34 => match i.first() {
                 Some(1) => {
-                    let n = u64::from_le_bytes(i.get(1..9).ok_or("entrada curta")?.try_into().unwrap());
-                    let name = std::str::from_utf8(&i[9..]).map_err(|_| "nome inválido")?;
+                    let n = u64::from_le_bytes(i.get(1..9).ok_or("short input")?.try_into().unwrap());
+                    let name = std::str::from_utf8(&i[9..]).map_err(|_| "invalid name")?;
                     Ok(H::new("wallet/name/salt").b(&self.seed).s(name).n(n).d32().to_vec())
                 }
                 Some(2) => Ok(H::new("wallet/swap/secret").b(&self.seed).n(u32le(&i[1..])? as u64).d32().to_vec()),
-                _ => Err("derivação não permitida".into()),
+                _ => Err("derivation not allowed".into()),
             },
-            // cifra/decifra dados da carteira em repouso (chave derivada da semente)
+            // encrypts/decrypts wallet data at rest (key derived from the seed)
             35 | 36 => {
                 use aes_gcm::aead::{Aead, KeyInit};
                 use aes_gcm::{Aes256Gcm, Nonce};
                 let key = H::new("wallet/store").b(&self.seed).d32();
-                let c = Aes256Gcm::new_from_slice(&key).map_err(|_| "chave")?;
+                let c = Aes256Gcm::new_from_slice(&key).map_err(|_| "key")?;
                 if op == 35 {
                     let mut iv = [0u8; 12];
-                    getrandom::fill(&mut iv).map_err(|_| "aleatoriedade indisponível")?;
+                    getrandom::fill(&mut iv).map_err(|_| "randomness unavailable")?;
                     let mut out = iv.to_vec();
-                    out.extend(c.encrypt(Nonce::from_slice(&iv), i).map_err(|_| "falha ao cifrar")?);
+                    out.extend(c.encrypt(Nonce::from_slice(&iv), i).map_err(|_| "encryption failed")?);
                     Ok(out)
                 } else {
-                    if i.len() < 28 { return Err("dados cifrados curtos".into()); }
-                    c.decrypt(Nonce::from_slice(&i[..12]), &i[12..]).map_err(|_| "dados da carteira corrompidos ou de outra semente".into())
+                    if i.len() < 28 { return Err("encrypted data too short".into()); }
+                    c.decrypt(Nonce::from_slice(&i[..12]), &i[12..]).map_err(|_| "wallet data corrupted or from another seed".into())
                 }
             }
-            _ => Err(format!("operação do cofre desconhecida: {op}")),
+            _ => Err(format!("unknown vault operation: {op}")),
         }
     }
 }
 
-// ------------------------------------------------------------------ assinaturas que usam o cofre
-/// CLSAG (espelha clsagSign de src/crypto/clsag.js): nonce hedged, conferida antes de sair.
-/// Saída: c0 ‖ s_0 … s_{n−1} ‖ I ‖ D.
+// ------------------------------------------------------------------ signatures that use the vault
+/// CLSAG (mirrors clsagSign from src/crypto/clsag.js): hedged nonce, checked before returning.
+/// Output: c0 ‖ s_0 … s_{n−1} ‖ I ‖ D.
 pub fn clsag_sign(msg: &[u8], ring: &[RingMember], pseudo: &P1, pi: usize, p: &Sc, z: &Sc) -> Result<Vec<u8>, String> {
     let n = ring.len();
     let hp_pi = hash_point_for_key_image(&ring[pi].p);
-    if !mul_g_ct(z).eq(&ring[pi].c.sub(pseudo)) { return Err("clsag: compromisso não corresponde".into()); }
+    if !mul_g_ct(z).eq(&ring[pi].c.sub(pseudo)) { return Err("clsag: commitment does not match".into()); }
     let ki = ct_mul(&hp_pi, p);
     let dd = ct_mul(&hp_pi, z);
     let ring_p: Vec<u8> = ring.iter().flat_map(|m| m.p.to_bytes()).collect();
@@ -215,7 +215,7 @@ pub fn clsag_sign(msg: &[u8], ring: &[RingMember], pseudo: &P1, pi: usize, p: &S
     c[(pi + 1) % n] = round(&mul_g_ct(&alpha), &ct_mul(&hp_pi, &alpha));
     for k in 1..n {
         let i = (pi + k) % n;
-        s[i] = Sc::random(); // respostas falsas dos outros membros: públicas
+        s[i] = Sc::random(); // fake responses of the other members: public
         let l = mul_g(&s[i]).add(&ring[i].p.mul(&(c[i] * mu_p))).add(&ring[i].c.sub(pseudo).mul(&(c[i] * mu_c)));
         let r = hash_point_for_key_image(&ring[i].p).mul(&s[i]).add(&wt.mul(&c[i]));
         c[(i + 1) % n] = round(&l, &r);
@@ -224,14 +224,14 @@ pub fn clsag_sign(msg: &[u8], ring: &[RingMember], pseudo: &P1, pi: usize, p: &S
     let mut sig = c[0].to_be_bytes().to_vec();
     for x in &s { sig.extend_from_slice(&x.to_be_bytes()); }
     sig.extend_from_slice(&db);
-    if !clsag_verify(msg, ring, pseudo, &sig, &ki) { return Err("clsag: falha ao assinar (verificação)".into()); }
+    if !clsag_verify(msg, ring, pseudo, &sig, &ki) { return Err("clsag: signing failed (verification)".into()); }
     let mut out = sig[..32 + 32 * n].to_vec();
     out.extend_from_slice(&kib);
     out.extend_from_slice(&db);
     Ok(out)
 }
 
-/// DLEQ da prova de reservas (espelha src/wallet/reserves.js): log_G(P) = log_Hp(P)(I). Saída c ‖ s.
+/// Proof of reserves DLEQ (mirrors src/wallet/reserves.js): log_G(P) = log_Hp(P)(I). Output c ‖ s.
 pub fn dleq_prove(p: &Sc, pk: &P1, ki: &P1, ctx: &[u8]) -> Result<Vec<u8>, String> {
     let hp = hash_point_for_key_image(pk);
     let k = hedged("reserves/nonce", &[&p.to_be_bytes()], &[ctx, &pk.to_bytes(), &ki.to_bytes()].concat());
@@ -239,8 +239,8 @@ pub fn dleq_prove(p: &Sc, pk: &P1, ki: &P1, ctx: &[u8]) -> Result<Vec<u8>, Strin
     let chal = |a: &P1, b: &P1| hash_to_scalar(H::new("reserves/dleq").b(ctx).b(&pk.to_bytes()).b(&ki.to_bytes()).b(&a.to_bytes()).b(&b.to_bytes()));
     let c = chal(&a, &b);
     let s = k - c * *p;
-    // confere: s·G + c·P = A e s·Hp + c·I = B
-    if chal(&mul_g(&s).add(&pk.mul(&c)), &hp.mul(&s).add(&ki.mul(&c))) != c { return Err("falha na prova de reservas (verificação)".into()); }
+    // checks: s·G + c·P = A and s·Hp + c·I = B
+    if chal(&mul_g(&s).add(&pk.mul(&c)), &hp.mul(&s).add(&ki.mul(&c))) != c { return Err("proof of reserves failed (verification)".into()); }
     Ok([c.to_be_bytes(), s.to_be_bytes()].concat())
 }
 
@@ -258,7 +258,7 @@ fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     outer.finalize().into()
 }
 
-/// ECDSA com nonce RFC 6979 e S baixo — os MESMOS bytes de src/btc/ecdsa.js. Saída r ‖ s.
+/// ECDSA with an RFC 6979 nonce and low S — the SAME bytes as src/btc/ecdsa.js. Output r ‖ s.
 pub fn ecdsa_sign(x: &Sc, hash: &[u8; 32]) -> Result<Vec<u8>, String> {
     let xb = x.to_be_bytes();
     let z = Sc::from_be_bytes_reduce(hash);
@@ -272,31 +272,31 @@ pub fn ecdsa_sign(x: &Sc, hash: &[u8; 32]) -> Result<Vec<u8>, String> {
         k = hmac_sha256(&k, &[&v, &[0]]); v = hmac_sha256(&k, &[&v]);
     };
     let rp = mul_g_ct(&nonce);
-    let (rx, _) = rp.affine().ok_or("ponto no infinito")?;
+    let (rx, _) = rp.affine().ok_or("point at infinity")?;
     let r = Sc::from_be_bytes_reduce(&rx.to_be_bytes());
     let mut s = nonce.invert() * (z + r * *x);
-    if r.is_zero() || s.is_zero() { return Err("assinatura degenerada".into()); }
+    if r.is_zero() || s.is_zero() { return Err("degenerate signature".into()); }
     let neg = -s;
-    // S baixo: escolhe o menor entre s e n − s (comparação de valores já públicos na assinatura)
+    // low S: picks the smaller of s and n − s (comparing values already public in the signature)
     if !crate::field::lt4(&be_limbs(&s.to_be_bytes()), &be_limbs(&neg.to_be_bytes())) { s = neg; }
-    // confere: R' = z/s·G + r/s·P, r == R'.x mod n
+    // checks: R' = z/s·G + r/s·P, r == R'.x mod n
     let si = s.invert();
-    let rr = mul_g(&(z * si)).add(&mul_g_ct(x).mul(&(r * si))); // x só em tempo constante
+    let rr = mul_g(&(z * si)).add(&mul_g_ct(x).mul(&(r * si))); // x only in constant time
     match rr.affine() {
         Some((xx, _)) if Sc::from_be_bytes_reduce(&xx.to_be_bytes()) == r => {}
-        _ => return Err("falha ao assinar ECDSA (verificação)".into()),
+        _ => return Err("ECDSA signing failed (verification)".into()),
     }
     Ok([r.to_be_bytes(), s.to_be_bytes()].concat())
 }
 fn be_limbs(b: &[u8; 32]) -> [u64; 4] { crate::field::be_to_limbs(b) }
 
-// ------------------------------------------------------------------ alças
+// ------------------------------------------------------------------ handles
 fn table() -> MutexGuard<'static, (u32, BTreeMap<u32, Vault>)> {
     static T: Mutex<(u32, BTreeMap<u32, Vault>)> = Mutex::new((0, BTreeMap::new()));
     T.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Operações 20–36 (ver o cabeçalho). 20 abre (semente → alça), 21 fecha (apaga).
+/// Operations 20–36 (see the header). 20 opens (seed → handle), 21 closes (wipes).
 pub fn vault_call(op: u32, i: &[u8]) -> Result<Vec<u8>, String> {
     let mut t = table();
     match op {
@@ -310,7 +310,7 @@ pub fn vault_call(op: u32, i: &[u8]) -> Result<Vec<u8>, String> {
         21 => { t.1.remove(&u32le(i)?); Ok(vec![]) }
         _ => {
             let h = u32le(i)?;
-            let v = t.1.get(&h).ok_or("cofre fechado ou inexistente")?;
+            let v = t.1.get(&h).ok_or("vault closed or nonexistent")?;
             v.call(op, &i[4..])
         }
     }
@@ -326,16 +326,16 @@ mod tests {
     fn derivations_and_signatures() {
         let h = open(&[7u8; 32]);
         let call = |op: u32, data: &[u8]| { let mut v = h.clone(); v.extend_from_slice(data); vault_call(op, &v) };
-        // chave transparente 0: assina e confere
+        // transparent key 0: signs and verifies
         let p = P1::from_bytes(&call(22, &[1, 0, 0, 0, 0]).unwrap()).unwrap();
         let mut req = vec![1, 0, 0, 0, 0, 3];
-        req.extend_from_slice(b"sigmensagem");
+        req.extend_from_slice(b"sigmessage");
         let sig = call(26, &req).unwrap();
-        assert!(schnorr_verify(&p, b"mensagem", &sig, "sig"));
-        // chaves de saída não assinam Schnorr; derivação fora da lista fechada é recusada
+        assert!(schnorr_verify(&p, b"message", &sig, "sig"));
+        // output keys do not sign Schnorr; a derivation outside the closed list is refused
         assert!(call(26, &[7, 0, 0, 0, 0, 3, b's', b'i', b'g']).is_err());
         assert!(call(34, &[9]).is_err());
-        // saída privada: P = (k + b + m)·G; imagem de chave e DLEQ
+        // private output: P = (k + b + m)·G; key image and DLEQ
         let k = Sc::random();
         let sub = u32::to_le_bytes(3);
         let dc = call(23, &sub).unwrap();
@@ -347,16 +347,16 @@ mod tests {
         let ki = P1::from_bytes(&call(29, &[dsc.clone(), out_p.to_bytes().to_vec()].concat()).unwrap()).unwrap();
         let ctx = [5u8; 32];
         assert!(call(32, &[dsc.clone(), out_p.to_bytes().to_vec(), ki.to_bytes().to_vec(), ctx.to_vec()].concat()).is_ok());
-        // P errado: recusado
+        // wrong P: refused
         assert!(call(29, &[dsc, mul_g(&k).to_bytes().to_vec()].concat()).is_err());
-        // ECDSA da troca: assinatura válida
+        // swap ECDSA: valid signature
         let mut e = vec![5, 2, 0, 0, 0];
         e.extend_from_slice(&[9u8; 32]);
         assert_eq!(call(33, &e).unwrap().len(), 64);
-        // cifra em repouso
-        let blob = call(35, b"dados privados").unwrap();
-        assert_eq!(call(36, &blob).unwrap(), b"dados privados");
-        // fechado: nada mais funciona
+        // encryption at rest
+        let blob = call(35, b"private data").unwrap();
+        assert_eq!(call(36, &blob).unwrap(), b"private data");
+        // closed: nothing works anymore
         vault_call(21, &h).unwrap();
         assert!(call(22, &[1, 0, 0, 0, 0]).is_err());
     }

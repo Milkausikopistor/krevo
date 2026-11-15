@@ -1,7 +1,7 @@
-// Carteira: guarda a semente, sincroniza com um nó via RPC e monta transações.
-// Gastos privados provam pertencer à árvore de TODAS as saídas privadas (FCMP). A carteira
-// pede ao nó o caminho do seu "pedaço" da árvore misturado a pedaços-isca — o nó não
-// sabe qual deles é o real. (Na simnet ainda dá para usar anéis, para testes rápidos.)
+// Wallet: keeps the seed, syncs with a node over RPC and builds transactions.
+// Private spends prove they belong to the tree of ALL private outputs (FCMP). The wallet asks
+// the node for the path of its "chunk" of the tree mixed with decoy chunks — the node does not
+// know which one is real. (On simnet rings can still be used, for fast tests.)
 
 import fs from 'node:fs';
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from 'node:crypto';
@@ -29,29 +29,29 @@ function decryptSeed(enc, password) {
   const key = scryptSync(password, fromHex(enc.salt), 32, { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
   const d = createDecipheriv('aes-256-gcm', key, fromHex(enc.iv));
   d.setAuthTag(fromHex(enc.tag));
-  try { return Buffer.concat([d.update(fromHex(enc.ct)), d.final()]); } catch { throw new Error('senha incorreta'); }
+  try { return Buffer.concat([d.update(fromHex(enc.ct)), d.final()]); } catch { throw new Error('wrong password'); }
 }
 
-// Campos do arquivo que ficam à vista; todo o resto (saídas, histórico, segredos de transação,
-// rótulos…) vai cifrado com uma chave derivada da semente, DENTRO do cofre, quando há senha.
+// File fields that stay in the clear; everything else (outputs, history, transaction secrets,
+// labels…) is encrypted with a key derived from the seed, INSIDE the vault, when there is a password.
 const PUBLIC_FIELDS = new Set(['version', 'network', 'seedEnc', 'mnemonicEnc', 'hasPassphrase', 'seed', 'mnemonic', 'sealed']);
 
 export class Wallet {
-  /** opts.seed: semente já decifrada por quem chama (ex.: a carteira do navegador). */
+  /** opts.seed: seed already decrypted by the caller (e.g. the browser wallet). */
   constructor(file, data, params, rpcUrl, password, opts = {}) {
     this.file = file; this.data = data; this.params = params; this.rpcUrl = rpcUrl;
     const seed = opts.seed ? Buffer.from(opts.seed) : data.seedEnc ? decryptSeed(data.seedEnc, password ?? '') : fromHex(data.seed);
-    // a semente vai para o cofre e a cópia daqui é apagada: as chaves não existem no JavaScript
+    // the seed goes into the vault and the copy here is wiped: the keys do not exist in JavaScript
     try { this.keys = new Keys(seed); } finally { seed.fill(0); }
-    // frase de recuperação: a cifrada só é decifrada quando o usuário pede (revealMnemonic)
+    // recovery phrase: the encrypted one is only decrypted when the user asks (revealMnemonic)
     this.mnemonic = data.mnemonicEnc ? null : (data.mnemonic ?? null);
     if (data.sealed) {
       Object.assign(data, JSON.parse(this.keys.vault.unseal(fromHex(data.sealed)).toString('utf8')));
       delete data.sealed;
     }
-    // Arquivos antigos guardavam a chave de uso único p de cada saída privada EM TEXTO PURO (quem
-    // lesse o arquivo gastava as moedas sem a senha). Agora fica só k (nível de visualização) e p
-    // é calculado no cofre na hora de gastar: apaga os p e refaz a varredura.
+    // Old files stored each private output's one-time key p IN PLAIN TEXT (whoever read the file
+    // could spend the coins without the password). Now only k (view level) is kept and p is
+    // computed in the vault when spending: erase the p values and rescan.
     let migrated = false;
     for (const o of data.sOwned ?? []) {
       if (o.p !== undefined) { delete o.p; migrated = true; }
@@ -61,21 +61,21 @@ export class Wallet {
       data.sScanned = 0;
     }
     this.tUtxos = [];
-    // 'fcmp' (árvore inteira) ou 'ring' (anel de 16, legado — só onde o consenso aceita)
+    // 'fcmp' (whole tree) or 'ring' (ring of 16, legacy — only where consensus accepts it)
     this.privateInputs = params.ringInputs ? 'ring' : 'fcmp';
   }
 
   /**
-   * Cria uma carteira nova. Por padrão gera uma frase de recuperação de 24 palavras
-   * (BIP-39); `mnemonic` restaura a partir de uma frase existente. `passphrase` é a
-   * "frase extra" opcional do BIP-39: sem ela, a mesma frase gera outra carteira.
+   * Creates a new wallet. By default it generates a 24-word recovery phrase (BIP-39);
+   * `mnemonic` restores from an existing phrase. `passphrase` is BIP-39's optional
+   * "extra phrase": without it, the same phrase produces a different wallet.
    */
   static create(file, params, rpcUrl, { password, seed, mnemonic, passphrase = '', words = 24 } = {}) {
-    if (fs.existsSync(file)) throw new Error(`a carteira ${file} já existe`);
+    if (fs.existsSync(file)) throw new Error(`the wallet ${file} already exists`);
     let m = null, s = seed;
     if (!s) {
       m = mnemonic ? normalizeMnemonic(mnemonic) : generateMnemonic(words);
-      mnemonicToEntropy(m); // valida o checksum
+      mnemonicToEntropy(m); // validates the checksum
       s = walletSeedFromMnemonic(m, passphrase);
     }
     const data = { version: 2, network: params.name, sScanned: 0, sOwned: [], txSecrets: {}, hasPassphrase: !!passphrase };
@@ -86,32 +86,32 @@ export class Wallet {
       data.seed = toHex(s);
       if (m) data.mnemonic = m;
     }
-    const w = new this(file, data, params, rpcUrl, password); // "this": também cria a carteira leve (subclasse)
-    if (m) w.mnemonic = m; // para mostrar UMA vez, na criação
+    const w = new this(file, data, params, rpcUrl, password); // "this": also creates the light wallet (subclass)
+    if (m) w.mnemonic = m; // to show ONCE, at creation
     w.save();
     return w;
   }
 
-  /** Restaura a partir da frase de recuperação (e da frase extra, se foi usada). */
+  /** Restores from the recovery phrase (and the extra phrase, if one was used). */
   static restore(file, params, rpcUrl, { mnemonic, passphrase = '', password } = {}) {
-    if (!mnemonic) throw new Error('informe a frase de recuperação');
+    if (!mnemonic) throw new Error('enter the recovery phrase');
     return this.create(file, params, rpcUrl, { mnemonic, passphrase, password });
   }
   static load(file, params, rpcUrl, password) {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (data.network !== params.name) throw new Error(`carteira é da rede ${data.network}`);
+    if (data.network !== params.name) throw new Error(`the wallet belongs to the ${data.network} network`);
     return new this(file, data, params, rpcUrl, password);
   }
-  /** Grava de forma atômica (arquivo temporário + rename: uma queda no meio não corrompe a carteira)
-   *  e só legível pelo dono (0600). */
+  /** Writes atomically (temporary file + rename: a crash halfway does not corrupt the wallet)
+   *  and readable only by the owner (0600). */
   save() {
     if (!this.file) return;
     const tmp = `${this.file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.fileData(), null, 2), { mode: 0o600 });
     fs.renameSync(tmp, this.file);
-    try { fs.chmodSync(this.file, 0o600); } catch { /* sistemas sem permissões POSIX */ }
+    try { fs.chmodSync(this.file, 0o600); } catch { /* systems without POSIX permissions */ }
   }
-  /** O que vai para o disco: com senha, só os campos públicos à vista; o resto cifrado pelo cofre. */
+  /** What goes to disk: with a password, only the public fields in the clear; the rest encrypted by the vault. */
   fileData() {
     if (!this.data.seedEnc) return this.data;
     const pub = {}, priv = {};
@@ -119,29 +119,29 @@ export class Wallet {
     pub.sealed = toHex(this.keys.vault.seal(Buffer.from(JSON.stringify(priv), 'utf8')));
     return pub;
   }
-  /** Frase de recuperação, decifrada só agora (pede a senha de novo). */
+  /** Recovery phrase, decrypted only now (asks for the password again). */
   revealMnemonic(password) {
     if (this.data.mnemonicEnc) return decryptSeed(this.data.mnemonicEnc, password ?? '').toString('utf8');
     return this.data.mnemonic ?? null;
   }
-  /** Apaga as chaves da memória (o cofre é zerado); a carteira não assina mais. */
+  /** Erases the keys from memory (the vault is zeroed); the wallet no longer signs. */
   close() { this.keys.close(); }
   call(m, p) { return rpc(this.rpcUrl, m, p); }
 
   get tAddress() { return this.keys.tAddress(this.params, 0); }
   get sAddress() { return this.keys.sAddress(this.params, 0); }
-  /** Endereço transparente resistente a computadores quânticos (krq1…). */
+  /** Quantum-safe transparent address (krq1…). */
   get qAddress() { return this.keys.qAddress(this.params, 0); }
-  /** Modo quântico: troco e consolidações vão para o krq1… em vez do krv1…. */
+  /** Quantum mode: change and consolidations go to krq1… instead of krv1…. */
   get quantum() { return !!this.data.quantum; }
   get _changeLock() { return this.quantum ? this.keys.qKey(0).lock : this.keys.tKey(0).lock; }
 
   /**
-   * Peso de uma moeda transparente no limite de entradas: uma entrada krq1… leva a testemunha
-   * híbrida (3.830 bytes, ~5.900 de massa), ~6× uma entrada Schnorr (~1.100).
+   * Weight of a transparent coin within the input limit: a krq1… input carries the hybrid
+   * witness (3,830 bytes, ~5,900 mass), ~6× a Schnorr input (~1,100).
    */
   static inputWeight(u) { return u.kind === 'q' ? 6 : 1; }
-  /** Maior prefixo de `coins` cujo peso total cabe em `maxInputs` entradas Schnorr-equivalentes. */
+  /** Longest prefix of `coins` whose total weight fits in `maxInputs` Schnorr-equivalent inputs. */
   static takeCoins(coins, maxInputs) {
     const out = [];
     let w = 0;
@@ -149,18 +149,18 @@ export class Wallet {
     return out;
   }
 
-  /** Entrada transparente pronta para o construtor, com as chaves certas para o tipo de endereço. */
+  /** Transparent input ready for the builder, with the right keys for the address type. */
   _tIn(u) {
     const base = { outpoint: parseOutpointKey(u.outpoint), amount: BigInt(u.amount) };
     if (u.kind === 'q') { const k = this.keys.qKey(0); return { ...base, signer: k.signer, pq: k }; }
     return { ...base, signer: this.keys.tKey(0).signer };
   }
 
-  // ----------------------------------------------------------- subendereços
-  /** Quantidade de endereços privados conhecidos (o principal é o índice 0). */
+  // ----------------------------------------------------------- subaddresses
+  /** Number of known private addresses (the main one is index 0). */
   get subCount() { return (this.data.subaddresses?.length ?? 0) + 1; }
 
-  /** Cria o próximo subendereço privado, com um rótulo só seu (não vai para a rede). */
+  /** Creates the next private subaddress, with a label of your own (it never goes to the network). */
   newSubaddress(label = '') {
     (this.data.subaddresses ??= []).push({ label, created: Date.now() });
     this.save();
@@ -168,9 +168,9 @@ export class Wallet {
     return { index, label, address: this.keys.sAddress(this.params, index) };
   }
 
-  subaddressLabel(i) { return i === 0 ? 'principal' : (this.data.subaddresses?.[i - 1]?.label || `subendereço ${i}`); }
+  subaddressLabel(i) { return i === 0 ? 'main' : (this.data.subaddresses?.[i - 1]?.label || `subaddress ${i}`); }
 
-  /** Lista: índice, rótulo, endereço e total recebido (não gasto) em cada endereço privado. */
+  /** List: index, label, address and total received (unspent) on each private address. */
   listSubaddresses() {
     return Array.from({ length: this.subCount }, (_, i) => {
       const outs = this.data.sOwned.filter((o) => (o.sub ?? 0) === i);
@@ -181,21 +181,21 @@ export class Wallet {
     });
   }
 
-  /** Índice do subendereço desta carteira com esse endereço, ou -1. */
+  /** Index of this wallet's subaddress with that address, or -1. */
   subaddressIndex(address) {
     for (let i = 0; i < this.subCount; i++) if (this.keys.sAddress(this.params, i) === address) return i;
     return -1;
   }
 
   async sync() {
-    // moedas transparentes nos dois endereços: krv1… (clássico) e krq1… (quântico)
+    // transparent coins on both addresses: krv1… (classic) and krq1… (quantum-safe)
     const tLock = toHex(this.keys.tKey(0).lock), qLock = toHex(this.keys.qKey(0).lock);
     this.tUtxos = (await this.call('getutxos', { locks: [tLock, qLock] })).utxos
       .map((u) => ({ ...u, kind: u.lock === qLock ? 'q' : 't' }));
 
-    // Varredura das saídas privadas (com margem para reorganizações). A tabela cobre
-    // todos os subendereços + 50 à frente: uma carteira restaurada pela frase encontra
-    // também os subendereços criados em outro computador.
+    // Scan of private outputs (with a margin for reorganizations). The table covers every
+    // subaddress + 50 ahead: a wallet restored from the phrase also finds the subaddresses
+    // created on another computer.
     const LOOKAHEAD = 50;
     let scanKeys = this.keys.scanKeysFor(this.subCount + LOOKAHEAD);
     const start = Math.max(0, this.data.sScanned - 200);
@@ -205,12 +205,12 @@ export class Wallet {
       const r = await this.call('getshieldedoutputs', { start: i, count: 2000 });
       total = r.total;
       this.data.daa = r.daaScore;
-      const sss = this.keys.vault.sharedMany(r.outputs.map((e) => fromHex(e.R))); // a·R no cofre, em lote
+      const sss = this.keys.vault.sharedMany(r.outputs.map((e) => fromHex(e.R))); // a·R in the vault, in a batch
       for (const [n, e] of r.outputs.entries()) {
         const o = { P: Point.fromBytes(fromHex(e.P)), C: Point.fromBytes(fromHex(e.C)), encAmount: fromHex(e.encAmount), viewTag: e.viewTag };
         const got = scanShieldedOutput(scanKeys, null, e.j, o, sss[n]);
         if (!got) continue;
-        if (got.index >= this.subCount) { // subendereço criado em outra cópia da carteira
+        if (got.index >= this.subCount) { // subaddress created in another copy of the wallet
           while (this.subCount <= got.index) (this.data.subaddresses ??= []).push({ label: '', created: Date.now(), recovered: true });
           scanKeys = this.keys.scanKeysFor(this.subCount + LOOKAHEAD);
         }
@@ -239,7 +239,7 @@ export class Wallet {
       const a = BigInt(u.amount);
       if (u.inMempool) tPending += a; else if (u.mature) tMature += a; else tImmature += a;
     }
-    // carteira leve: o que o servidor informou mas ainda não foi PROVADO não conta nem pode ser gasto
+    // light wallet: what the server reported but has not been PROVEN yet neither counts nor can be spent
     let unverified = (this.tUnverified ?? []).reduce((a, u) => a + BigInt(u.amount), 0n);
     for (const o of this.data.sOwned) {
       if (o.spent) continue;
@@ -250,29 +250,29 @@ export class Wallet {
   }
 
   _sMature(o) {
-    // FCMP: a moeda precisa estar dentro de uma âncora madura (fcmpMaturity cobre também as coinbases)
+    // FCMP: the coin must be inside a mature anchor (fcmpMaturity also covers coinbases)
     if (this.privateInputs === 'fcmp') return (this.data.daa ?? 0) - o.daa > this.params.fcmpMaturity;
     const need = o.coinbase ? Math.max(this.params.ringMaturity, this.params.coinbaseMaturity) : this.params.ringMaturity;
     return (this.data.daa ?? 0) - o.daa >= need;
   }
 
   /**
-   * Dados para gastar uma saída privada. FCMP: âncora + caminho do pedaço da árvore que
-   * contém a saída, pedido junto com 7 pedaços-isca. ctx guarda a âncora (a mesma para
-   * todas as entradas da transação).
+   * Data to spend a private output. FCMP: anchor + path of the tree chunk that contains the
+   * output, requested together with 7 decoy chunks. ctx keeps the anchor (the same for every
+   * input of the transaction).
    */
   async _privateInput(o, ctx = {}) {
-    if (o.k === undefined) throw new Error('sincronize a carteira antes de gastar (formato antigo)');
+    if (o.k === undefined) throw new Error('sync the wallet before spending (old format)');
     const base = { outpoint: parseOutpointKey(o.outpoint), amount: BigInt(o.amount), mask: BigInt(o.mask), spend: this.keys.spender(BigInt('0x' + o.k), o.sub ?? 0) };
     if (this.privateInputs === 'ring') return { ...base, ring: await this._ring(o) };
     const a = (ctx.anchor ??= await this.call('getfcmpanchor', {}));
-    if (o.index >= a.anchor) throw new Error('moeda privada recente demais: ela entra na árvore usada pelas provas em alguns segundos');
+    if (o.index >= a.anchor) throw new Error('private coin too recent: it enters the tree used by the proofs in a few seconds');
     const chunk = Math.floor(o.index / a.branch), total = Math.ceil(a.anchor / a.branch);
     const chunks = new Set([chunk]);
     while (chunks.size < Math.min(8, total)) chunks.add(Math.floor(Math.random() * total));
     const r = await this.call('getfcmppath', { anchor: a.anchor, chunks: [...chunks].sort(() => Math.random() - 0.5) });
     const mine = r.paths.find((x) => x.chunk === chunk);
-    if (!mine) throw new Error('o servidor não devolveu o caminho na árvore');
+    if (!mine) throw new Error('the server did not return the path in the tree');
     const path = mine.levels.map((l) => ({ level: l.level, idx: l.idx, entries: l.entries.map((h) => BigInt('0x' + h)) }));
     return {
       ...base, P: Point.fromBytes(fromHex(o.P)), C: Point.fromBytes(fromHex(o.C)),
@@ -280,7 +280,7 @@ export class Wallet {
     };
   }
 
-  /** Calcula a parte cara das provas FCMP de todas as entradas ao mesmo tempo. */
+  /** Computes the expensive part of the FCMP proofs of all inputs at the same time. */
   async _prepareFcmp(sInputs) {
     const f = sInputs.filter((s) => s.fcmp);
     if (!f.length) return;
@@ -294,13 +294,13 @@ export class Wallet {
     const total = info.total;
     const chosen = new Map(), rejected = new Set();
     for (let attempt = 0; attempt < 8 && chosen.size < need; attempt++) {
-      // nunca pedir mais índices distintos do que existem (evita laço infinito em redes pequenas)
+      // never ask for more distinct indexes than exist (avoids an infinite loop on small networks)
       const available = total - 1 - chosen.size - rejected.size;
       const want = Math.min(need * 4, available);
       if (want <= 0) break;
       const idx = new Set();
       while (idx.size < want) {
-        // metade uniforme, metade enviesada para saídas recentes (como os gastos reais)
+        // half uniform, half biased toward recent outputs (like real spends)
         const i = Math.random() < 0.5 ? Math.floor(Math.random() * total) : total - 1 - Math.floor(total * Math.random() ** 3);
         if (i !== real.index && !chosen.has(i) && !rejected.has(i)) idx.add(i);
       }
@@ -311,7 +311,7 @@ export class Wallet {
         else rejected.add(e.index);
       }
     }
-    if (chosen.size < need) throw new Error('conjunto de anonimato ainda pequeno demais para um anel; aguarde mais saídas privadas na rede');
+    if (chosen.size < need) throw new Error('anonymity set still too small for a ring; wait for more private outputs on the network');
     const ring = [...chosen.values(), { index: real.index, outpoint: real.outpoint, P: real.P, C: real.C }]
       .sort((a, b) => a.index - b.index)
       .map((e) => ({ outpoint: parseOutpointKey(e.outpoint), P: Point.fromBytes(fromHex(e.P)), C: Point.fromBytes(fromHex(e.C)) }));
@@ -319,36 +319,37 @@ export class Wallet {
   }
 
   /**
-   * Envia `amount` (grãos) para `to`. from: 'auto' | 'transparente' | 'privado'.
-   * Retorna { txid, fee, from }.
+   * Sends `amount` (grains) to `to`. from: 'auto' | 'transparent' | 'private'.
+   * Returns { txid, fee, from }.
    */
   async send({ to, amount, from = 'auto', feeRate, memo }) {
-    // @nome → endereço registrado na rede
+    // @name → address registered on the network
     let name = null;
     if (String(to).trim().startsWith('@')) {
       const info = await this.resolveName(to);
-      if (info.status === 'livre') throw new Error(`${String(to).trim()} não está registrado`);
-      if (info.status !== 'ativo') throw new Error(`${String(to).trim()} venceu e está em carência: confirme com o dono antes de pagar`);
+      if (info.status === 'free') throw new Error(`${String(to).trim()} is not registered`);
+      if (info.status !== 'active') throw new Error(`${String(to).trim()} expired and is in its grace period: check with the owner before paying`);
       name = info.name;
       to = info.target;
     }
     await this.sync();
     const dest = decodeAddress(this.params, to);
     if (memo && dest.type !== 's') {
-      throw new Error('memo só é possível em pagamentos para endereço privado (krs1…): num pagamento transparente ele ficaria público');
+      throw new Error('a memo is only possible on payments to a private address (krs1…): in a transparent payment it would be public');
     }
     const bal = this.balance();
     const margin = 1_000_000n;
-    let source = from;
+    // older Portuguese values are still accepted
+    let source = ({ transparente: 'transparent', privado: 'private', shielded: 'private' })[from] ?? from;
     if (source === 'auto') {
-      if (dest.type === 's' && bal.shielded >= amount + margin) source = 'privado';
-      else if (bal.transparent >= amount + margin) source = 'transparente';
-      else if (bal.shielded >= amount + margin) source = 'privado';
-      else throw new Error('saldo insuficiente');
+      if (dest.type === 's' && bal.shielded >= amount + margin) source = 'private';
+      else if (bal.transparent >= amount + margin) source = 'transparent';
+      else if (bal.shielded >= amount + margin) source = 'private';
+      else throw new Error('insufficient balance');
     }
     const outputs = [dest.type === 's' ? { type: 's', A: dest.A, B: dest.B, amount } : { type: 't', lock: dest.data, amount }];
     let tInputs = [], sInputs = [], change;
-    if (source === 'transparente') {
+    if (source === 'transparent') {
       const coins = this.tUtxos.filter((u) => u.mature && !u.inMempool).sort((a, b) => (BigInt(b.amount) > BigInt(a.amount) ? 1 : -1));
       let acc = 0n;
       for (const u of coins) {
@@ -356,9 +357,9 @@ export class Wallet {
         tInputs.push(this._tIn(u));
         acc += BigInt(u.amount);
       }
-      if (acc < amount) throw new Error('saldo transparente insuficiente');
+      if (acc < amount) throw new Error('insufficient transparent balance');
       change = { type: 't', lock: this._changeLock };
-    } else if (source === 'privado') {
+    } else if (source === 'private') {
       const coins = this.data.sOwned.filter((o) => !o.spent && !o.pending && !o.unverified && this._sMature(o)).sort((a, b) => (BigInt(b.amount) > BigInt(a.amount) ? 1 : -1));
       let acc = 0n;
       const ctx = {};
@@ -367,9 +368,9 @@ export class Wallet {
         sInputs.push(await this._privateInput(o, ctx));
         acc += BigInt(o.amount);
       }
-      if (acc < amount) throw new Error('saldo privado insuficiente');
+      if (acc < amount) throw new Error('insufficient private balance');
       change = { type: 's', A: this.keys.A, B: this.keys.B };
-    } else throw new Error('origem inválida: use transparente ou privado');
+    } else throw new Error('invalid source: use transparent or private');
 
     const tp = Date.now();
     await this._prepareFcmp(sInputs);
@@ -377,29 +378,29 @@ export class Wallet {
     const proveMs = Date.now() - tp;
     const res = await this.call('sendrawtransaction', { tx: toHex(tx.serialize()) });
     if (r) this.data.txSecrets[res.txid] = r.toString(16);
-    // registro local do envio (o segredo r permite gerar a prova de pagamento depois)
+    // local record of the payment (the secret r allows creating the payment proof later)
     (this.data.sent ??= {})[res.txid] = {
       to, name, amount: amount.toString(), fee: fee.toString(), memo: memo || null, from: source, time: Date.now(),
     };
     this.save();
-    // anonymitySet: entre quantas saídas privadas cada entrada privada se esconde (FCMP: todas)
+    // anonymitySet: among how many private outputs each private input hides (FCMP: all of them)
     const anonymitySet = sInputs.length ? (sInputs[0].fcmp ? sInputs[0].fcmp.anchor : sInputs[0].ring.length) : null;
     const prover = sInputs.some((s) => s.fcmp) ? fcmpParallel.lastProver : null;
     return { txid: res.txid, fee, from: source, size: tx.size, mass: tx.mass, name, to, privateInputs: sInputs.length, anonymitySet, proveMs, prover };
   }
 
-  /** Consulta um @nome na rede: { status: 'ativo'|'em carência'|'livre', target, owner, … }. */
+  /** Looks up an @name on the network: { status: 'active'|'grace'|'free', target, owner, … }. */
   resolveName(name) { return this.call('resolvename', { name }); }
 
   /**
-   * Envia saídas arbitrárias pagando com o saldo transparente maduro (usado pelos @nomes).
-   * extraInputs: entradas já prontas (ex.: o compromisso ou o registro de um nome);
-   * extraFee: taxa além da de massa (ex.: taxa anual do nome, que vai para o Fundo de Segurança).
+   * Sends arbitrary outputs paying with the mature transparent balance (used by @names).
+   * extraInputs: ready-made inputs (e.g. the commitment or the record of a name);
+   * extraFee: fee beyond the mass fee (e.g. the name's yearly fee, which goes to the Security Fund).
    */
   async sendOutputs(outputs, { extraInputs = [], extraFee = 0n, feeRate, maxInputs = 100 } = {}) {
     await this.sync();
     const want = outputs.reduce((a, o) => a + o.amount, 0n) + extraFee;
-    const margin = 2_000_000n; // folga para a taxa de massa
+    const margin = 2_000_000n; // headroom for the mass fee
     const tInputs = [...extraInputs];
     let acc = extraInputs.reduce((a, i) => a + i.amount, 0n);
     let weight = extraInputs.length * 6;
@@ -410,17 +411,17 @@ export class Wallet {
       tInputs.push(this._tIn(u));
       acc += BigInt(u.amount);
     }
-    if (acc < want) throw new Error(`saldo transparente insuficiente: precisa de ${want} grãos (+ taxa), há ${acc} (saldo privado não serve para taxas de nome)`);
+    if (acc < want) throw new Error(`insufficient transparent balance: needs ${want} grains (+ fee), has ${acc} (the private balance cannot pay name fees)`);
     const { tx, fee } = buildTransaction({ params: this.params, tInputs, outputs, change: { type: 't', lock: this._changeLock }, feeRate, extraFee });
     const res = await this.call('sendrawtransaction', { tx: toHex(tx.serialize()) });
     return { txid: res.txid, fee, tx };
   }
 
   /**
-   * Paga vários destinos numa única transação, com o saldo transparente (usado por pools).
-   * list: [{ to, amount }] — destinos transparentes e/ou privados (até 15 privados por transação).
+   * Pays several recipients in a single transaction, with the transparent balance (used by pools).
+   * list: [{ to, amount }] — transparent and/or private recipients (up to 15 private per transaction).
    */
-  /** Quanto dá para gastar numa transação usando no máximo `maxInputs` moedas transparentes maduras. */
+  /** How much can be spent in one transaction using at most `maxInputs` mature transparent coins. */
   async capacity(maxInputs = 140) {
     await this.sync();
     const coins = this.tUtxos.filter((u) => u.mature && !u.inMempool).sort((a, b) => (BigInt(b.amount) > BigInt(a.amount) ? 1 : -1));
@@ -428,8 +429,8 @@ export class Wallet {
   }
 
   /**
-   * Junta as menores moedas transparentes numa só (manutenção de quem recebe muitas
-   * recompensas pequenas, como pools). Retorna o txid ou null se não houver o que juntar.
+   * Merges the smallest transparent coins into one (maintenance for whoever receives many small
+   * rewards, like pools). Returns the txid, or null if there is nothing to merge.
    */
   async consolidate(maxInputs = 140) {
     await this.sync();
@@ -442,36 +443,36 @@ export class Wallet {
   }
 
   async sendMany(list, { feeRate, maxInputs = 140 } = {}) {
-    if (!list.length) throw new Error('nenhum destino');
+    if (!list.length) throw new Error('no destination');
     await this.sync();
     const outputs = list.map(({ to, amount }) => {
       const d = decodeAddress(this.params, to);
       return d.type === 's' ? { type: 's', A: d.A, B: d.B, amount } : { type: 't', lock: d.data, amount };
     });
-    if (outputs.filter((o) => o.type === 's').length > 15) throw new Error('no máximo 15 destinos privados por transação');
+    if (outputs.filter((o) => o.type === 's').length > 15) throw new Error('at most 15 private recipients per transaction');
     const total = list.reduce((a, x) => a + x.amount, 0n);
     const coins = this.tUtxos.filter((u) => u.mature && !u.inMempool).sort((a, b) => (BigInt(b.amount) > BigInt(a.amount) ? 1 : -1));
     const tInputs = [];
     let acc = 0n, weight = 0;
     for (const u of coins) {
-      // limite de entradas: a transação não pode passar da massa máxima
+      // input limit: the transaction cannot exceed the maximum mass
       if (acc >= total + 5_000_000n || weight + Wallet.inputWeight(u) > maxInputs) break;
       weight += Wallet.inputWeight(u);
       tInputs.push(this._tIn(u));
       acc += BigInt(u.amount);
     }
-    if (acc < total) throw new Error(`saldo transparente maduro insuficiente numa transação (${acc} < ${total} grãos)`);
+    if (acc < total) throw new Error(`insufficient mature transparent balance in one transaction (${acc} < ${total} grains)`);
     const { tx, fee } = buildTransaction({ params: this.params, tInputs, outputs, change: { type: 't', lock: this._changeLock }, feeRate });
     const res = await this.call('sendrawtransaction', { tx: toHex(tx.serialize()) });
     return { txid: res.txid, fee, size: tx.size };
   }
 
-  // ------------------------------------------------------- proteção quântica
+  // ------------------------------------------------------- quantum protection
   /**
-   * Situação da carteira frente a um computador quântico.
-   *   clássico: moedas em krv1… — a chave pública fica exposta no próprio endereço
-   *   quântico: moedas em krq1… — protegidas por Schnorr + ML-DSA (as duas são exigidas)
-   *   privado:  moedas em krs1… — o pool privado usa curvas elípticas (veja a documentação)
+   * The wallet's situation against a quantum computer.
+   *   classic: coins on krv1… — the public key is exposed in the address itself
+   *   quantum: coins on krq1… — protected by Schnorr + ML-DSA (both are required)
+   *   private: coins on krs1… — the private pool uses elliptic curves (see the documentation)
    */
   async quantumStatus() {
     await this.sync();
@@ -486,10 +487,10 @@ export class Wallet {
   }
 
   /**
-   * Migra para o endereço quântico: liga o modo quântico (troco e consolidações passam a ir
-   * para krq1…) e move as moedas clássicas maduras (krv1…) para krq1…, em lotes.
-   * includeShielded: também tira o saldo privado do pool e põe em krq1… — perde a privacidade
-   * desses valores, mas fica protegido contra roubo quântico.
+   * Migrates to the quantum-safe address: turns quantum mode on (change and consolidations go to
+   * krq1…) and moves the mature classic coins (krv1…) to krq1…, in batches.
+   * includeShielded: also takes the private balance out of the pool into krq1… — it loses the
+   * privacy of those amounts, but becomes protected against quantum theft.
    */
   async migrateQuantum({ includeShielded = false, feeRate, maxInputs = 140, maxShieldedInputs = 8 } = {}) {
     this.data.quantum = true;
@@ -505,7 +506,7 @@ export class Wallet {
       const { tx, fee } = buildTransaction({ params: this.params, tInputs, sweep: dest, feeRate });
       const res = await this.call('sendrawtransaction', { tx: toHex(tx.serialize()) });
       const amount = tInputs.reduce((a, x) => a + x.amount, 0n) - fee;
-      txs.push({ txid: res.txid, from: 'transparente', inputs: batch.length, amount, fee });
+      txs.push({ txid: res.txid, from: 'transparent', inputs: batch.length, amount, fee });
       moved += amount;
     }
     if (includeShielded) {
@@ -518,7 +519,7 @@ export class Wallet {
         const { tx, fee } = buildTransaction({ params: this.params, sInputs, sweep: dest, feeRate });
         const res = await this.call('sendrawtransaction', { tx: toHex(tx.serialize()) });
         const amount = sInputs.reduce((a, x) => a + x.amount, 0n) - fee;
-        txs.push({ txid: res.txid, from: 'privado', inputs: batch.length, amount, fee });
+        txs.push({ txid: res.txid, from: 'private', inputs: batch.length, amount, fee });
         moved += amount;
       }
     }
@@ -526,31 +527,31 @@ export class Wallet {
     return { address: this.qAddress, txs, moved, pendingClassic };
   }
 
-  /** Paga um link de cobrança krevo:… (valor e memo vêm do link). */
+  /** Pays a krevo:… payment request link (amount and memo come from the link). */
   async payRequest(uri, { from = 'auto', amount = null, feeRate } = {}) {
     const req = parsePaymentURI(this.params, uri);
-    if (isExpired(req)) throw new Error('esta cobrança expirou; peça um novo QR code');
+    if (isExpired(req)) throw new Error('this payment request has expired; ask for a new QR code');
     const value = req.amount ?? amount;
-    if (!value) throw new Error('a cobrança não define valor; informe o valor');
+    if (!value) throw new Error('the payment request has no amount; enter the amount');
     const res = await this.send({ to: req.address, amount: value, from, feeRate, memo: req.memo ?? undefined });
     return { ...res, request: req };
   }
 
   /**
-   * Lado de quem cobra: espera chegar o pagamento de uma cobrança desta carteira.
-   * Cobrança privada → casa pelo memo (código único do pedido) e valor mínimo.
-   * Cobrança transparente → casa pela primeira saída nova com valor suficiente.
+   * Requester's side: waits for the payment of a request made by this wallet.
+   * Private request → matched by the memo (unique order code) and minimum amount.
+   * Transparent request → matched by the first new output with enough value.
    */
   async waitForPayment(req, { timeoutMs = 30 * 60_000, intervalMs = 400 } = {}) {
     const sub = req.type === 's' ? this.subaddressIndex(req.address) : -1;
-    if (req.address !== this.tAddress && req.address !== this.qAddress && sub < 0) throw new Error('esta cobrança não é desta carteira');
+    if (req.address !== this.tAddress && req.address !== this.qAddress && sub < 0) throw new Error('this payment request does not belong to this wallet');
     await this.sync();
     const seenT = new Set(this.tUtxos.map((u) => u.outpoint));
     const seenS = new Set(this.data.sOwned.map((o) => o.outpoint));
     const t0 = Date.now();
     for (;;) {
       if (req.type === 's') {
-        // com memo, o código do pedido identifica o pagamento mesmo que ele tenha chegado antes de começarmos a esperar
+        // with a memo, the order code identifies the payment even if it arrived before we started waiting
         const hit = this.data.sOwned.find((o) => !o.coinbase && (o.sub ?? 0) === sub && (req.memo ? o.memo === req.memo : !seenS.has(o.outpoint))
           && (!req.amount || BigInt(o.amount) >= req.amount));
         if (hit) return { txid: hit.outpoint.split(':')[0], amount: BigInt(hit.amount), ms: Date.now() - t0, memo: hit.memo };
@@ -558,13 +559,13 @@ export class Wallet {
         const hit = this.tUtxos.find((u) => !seenT.has(u.outpoint) && !u.coinbase && (!req.amount || BigInt(u.amount) >= req.amount));
         if (hit) return { txid: hit.outpoint.split(':')[0], amount: BigInt(hit.amount), ms: Date.now() - t0 };
       }
-      if (Date.now() - t0 > timeoutMs || isExpired(req)) throw new Error('cobrança não paga dentro do prazo');
+      if (Date.now() - t0 > timeoutMs || isExpired(req)) throw new Error('payment request not paid in time');
       await new Promise((r) => setTimeout(r, intervalMs));
       await this.sync();
     }
   }
 
-  /** Histórico: pagamentos enviados por esta carteira e saídas privadas recebidas (com memo). */
+  /** History: payments sent by this wallet and private outputs received (with memo). */
   history() {
     const sent = Object.entries(this.data.sent ?? {}).map(([txid, s]) => ({ txid, ...s, amount: BigInt(s.amount), fee: BigInt(s.fee) }))
       .sort((a, b) => b.time - a.time);
@@ -575,18 +576,18 @@ export class Wallet {
     return { sent, received };
   }
 
-  /** Prova de pagamento para um envio feito por esta carteira a um endereço privado. */
+  /** Payment proof for a payment made by this wallet to a private address. */
   prove(txid, message = '') {
     const rec = this.data.sent?.[txid];
     const r = this.data.txSecrets?.[txid];
-    if (!rec || !r) throw new Error('esta carteira não tem registro de ter enviado essa transação');
+    if (!rec || !r) throw new Error('this wallet has no record of having sent that transaction');
     if (decodeAddress(this.params, rec.to).type !== 's') {
-      throw new Error('pagamentos transparentes já são públicos: o txid e o endereço bastam como prova');
+      throw new Error('transparent payments are already public: the txid and the address are proof enough');
     }
     return createPaymentProof(this.params, { txid: fromHex(txid), r: BigInt('0x' + r), j: 0, address: rec.to, message });
   }
 
-  /** Verifica uma prova usando um nó (não precisa de carteira). */
+  /** Verifies a proof using a node (no wallet needed). */
   static async verifyProof(params, rpcUrl, { proof, address, message = '' }) {
     const { txid } = decodePaymentProof(params, proof);
     const info = await rpc(rpcUrl, 'gettransaction', { txid: toHex(txid) });
@@ -594,7 +595,7 @@ export class Wallet {
     return { ...res, txid: toHex(txid), status: info.status, confirmations: info.confirmations };
   }
 
-  /** Espera a transação ser aceita pelo virtual; retorna o tempo em ms. */
+  /** Waits until the transaction is accepted by the virtual block; returns the time in ms. */
   async waitAccepted(txid, timeoutMs = 30_000) {
     const t0 = Date.now();
     while (Date.now() - t0 < timeoutMs) {
@@ -602,6 +603,6 @@ export class Wallet {
       if (s.status === 'accepted') return Date.now() - t0;
       await new Promise((r) => setTimeout(r, 25));
     }
-    throw new Error('tempo esgotado esperando confirmação');
+    throw new Error('timed out waiting for confirmation');
   }
 }

@@ -1,8 +1,10 @@
-# Fora da imagem Docker: dados, carteiras, compilados, git
+# Kept out of the Docker image: data, wallets, build output, git
 .git
 **/target
-dados
 data
+dados
+wallet-*.json
+*-wallet-*.json
 carteira-*.json
 node_modules
 *.log

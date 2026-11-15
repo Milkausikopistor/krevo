@@ -1,19 +1,19 @@
-// PROVA DE RESERVAS — para corretoras (ou qualquer custodiante) provarem que têm o dinheiro
-// dos clientes, sem expor quem são os clientes.
+// PROOF OF RESERVES — for exchanges (or any custodian) to prove they hold their customers'
+// money, without exposing who the customers are.
 //
-// 1) ATIVOS: o que a carteira da corretora controla AGORA, amarrado a uma mensagem do momento
-//    (ex.: "Exchange X — auditoria de 13/11/2026"), que impede reaproveitar provas antigas.
-//      • moedas transparentes: uma assinatura Schnorr por moeda com a chave do endereço;
-//      • moedas privadas: revela valor e máscara (abre o compromisso C = x·G + v·H), a imagem de
-//        chave I e uma prova DLEQ de que log_G(P) = log_Hp(P)(I) — ou seja, quem prova tem a chave
-//        da saída e I é a imagem dela. Como I ainda não aparece na rede, a moeda NÃO foi gasta,
-//        e duas corretoras não conseguem contar a mesma moeda (a mesma saída tem uma só I).
-//      Custo de privacidade: as saídas da CORRETORA ficam identificadas (as dos clientes, não).
+// 1) ASSETS: what the exchange's wallet controls NOW, bound to a message of the moment
+//    (e.g. "Exchange X — audit of 2026-11-13"), which prevents reusing old proofs.
+//      • transparent coins: one Schnorr signature per coin with the address key;
+//      • private coins: reveals amount and mask (opens the commitment C = x·G + v·H), the key
+//        image I and a DLEQ proof that log_G(P) = log_Hp(P)(I) — that is, the prover has the
+//        output's key and I is its image. Since I does not appear on the network yet, the coin was
+//        NOT spent, and two exchanges cannot count the same coin (the same output has a single I).
+//      Privacy cost: the EXCHANGE's outputs become identified (the customers' do not).
 //
-// 2) PASSIVOS: árvore de Merkle com SOMAS (Maxwell). Cada folha é H(conta, sal, saldo) — o sal
-//    de cada cliente é entregue só a ele —, cada nó soma os filhos e a raiz traz o total devido.
-//    Cada cliente confere que o seu saldo está na raiz publicada; a corretora prova
-//    ATIVOS ≥ total da raiz.
+// 2) LIABILITIES: Merkle tree with SUMS (Maxwell). Each leaf is H(account, salt, balance) — each
+//    customer's salt is handed only to them —, each node sums its children and the root carries
+//    the total owed. Each customer checks that their balance is in the published root; the
+//    exchange proves ASSETS ≥ root total.
 
 import { randomBytes } from 'node:crypto';
 import { Point, mulG, modN, randomScalar, hedgedScalar, hashToScalar, scalarToBytes } from '../crypto/secp256k1.js';
@@ -29,13 +29,13 @@ import { toHex, fromHex, scalarToBytesHex } from './reserves-util.js';
 
 const ctxOf = (network, message, outpoint) => H('reserves/ctx', network, message, outpoint);
 
-// a prova DLEQ é feita no cofre (src/crypto/vault.js → src/crypto/dleq.js no plano B)
+// the DLEQ proof is made in the vault (src/crypto/vault.js → src/crypto/dleq.js in plan B)
 const dleqHex = ({ c, s }) => ({ c: scalarToBytesHex(c), s: scalarToBytesHex(s) });
 const dleqVerify = (P, I, ctx, proof) => dleqCheck(P, I, ctx, { c: BigInt('0x' + proof.c), s: BigInt('0x' + proof.s) });
 
-/** Monta a prova de ativos com TODAS as moedas não gastas da carteira (já sincronizada). */
+/** Builds the asset proof with ALL the wallet's unspent coins (already synced). */
 export async function proveReserves(wallet, message) {
-  if (!message || message.length < 8) throw new Error('use uma mensagem do momento, ex.: "Exchange X — auditoria de 13/11/2026"');
+  if (!message || message.length < 8) throw new Error('use a message of the moment, e.g. "Exchange X — audit of 2026-11-13"');
   await wallet.sync();
   const network = wallet.params.name;
   const t = wallet.keys.tKey(0);
@@ -44,7 +44,7 @@ export async function proveReserves(wallet, message) {
     sig: toHex(t.signer.sign(ctxOf(network, message, u.outpoint), 'reserves')),
   }));
   const priv = wallet.data.sOwned.filter((o) => !o.spent && !o.pending && !o.unverified).map((o) => {
-    if (o.k === undefined) throw new Error('sincronize a carteira antes (formato antigo)');
+    if (o.k === undefined) throw new Error('sync the wallet first (old format)');
     const P = Point.fromBytes(fromHex(o.P)), spend = wallet.keys.spender(BigInt('0x' + o.k), o.sub ?? 0);
     const I = spend.keyImage(P);
     return {
@@ -53,27 +53,27 @@ export async function proveReserves(wallet, message) {
     };
   });
   const total = [...transparent, ...priv].reduce((a, x) => a + BigInt(x.amount), 0n);
-  return { krevo: 'prova-de-reservas', version: 1, network, message, createdAt: Date.now(), transparent, private: priv, total: total.toString() };
+  return { krevo: 'proof-of-reserves', version: 1, network, message, createdAt: Date.now(), transparent, private: priv, total: total.toString() };
 }
 
 /**
- * Confere a prova contra um nó. Retorna { valid, total, transparent, private, issues }.
- * Só soma o que passa em TODAS as checagens; qualquer problema vai para `issues`.
+ * Checks the proof against a node. Returns { valid, total, transparent, private, issues }.
+ * Only adds up what passes ALL the checks; any problem goes to `issues`.
  */
 export async function verifyReserves(params, rpcUrl, proof, { message } = {}) {
   const issues = [];
-  if (proof.krevo !== 'prova-de-reservas' || proof.network !== params.name) throw new Error('arquivo não é uma prova de reservas desta rede');
-  if (message !== undefined && message !== proof.message) issues.push('a mensagem da prova é diferente da combinada (pode ser uma prova antiga)');
+  if (!['proof-of-reserves', 'prova-de-reservas'].includes(proof.krevo) || proof.network !== params.name) throw new Error('the file is not a proof of reserves for this network');
+  if (message !== undefined && message !== proof.message) issues.push('the proof\'s message differs from the agreed one (it may be an old proof)');
   const seen = new Set();
   let tTotal = 0n, sTotal = 0n;
-  // transparentes: existem, não estão sendo gastas, valor confere e a assinatura é do dono
+  // transparent: they exist, are not being spent, the amount matches and the signature is the owner's
   const byLock = new Map();
   for (const e of proof.transparent ?? []) {
-    if (seen.has(e.outpoint)) { issues.push(`moeda repetida ${e.outpoint.slice(0, 16)}…`); continue; }
+    if (seen.has(e.outpoint)) { issues.push(`repeated coin ${e.outpoint.slice(0, 16)}…`); continue; }
     seen.add(e.outpoint);
     let P;
-    try { P = Point.fromBytes(fromHex(e.pubkey)); } catch { issues.push('chave pública inválida'); continue; }
-    if (!schnorrVerify(P, ctxOf(params.name, proof.message, e.outpoint), fromHex(e.sig), 'reserves')) { issues.push(`assinatura inválida em ${e.outpoint.slice(0, 16)}…`); continue; }
+    try { P = Point.fromBytes(fromHex(e.pubkey)); } catch { issues.push('invalid public key'); continue; }
+    if (!schnorrVerify(P, ctxOf(params.name, proof.message, e.outpoint), fromHex(e.sig), 'reserves')) { issues.push(`invalid signature on ${e.outpoint.slice(0, 16)}…`); continue; }
     const lock = toHex(transparentData(P));
     (byLock.get(lock) ?? byLock.set(lock, []).get(lock)).push(e);
   }
@@ -81,14 +81,14 @@ export async function verifyReserves(params, rpcUrl, proof, { message } = {}) {
     const { utxos } = await rpc(rpcUrl, 'getutxos', { locks: [lock] });
     const live = new Map(utxos.filter((u) => !u.inMempool).map((u) => [u.outpoint, BigInt(u.amount)]));
     for (const e of entries) {
-      if (!live.has(e.outpoint)) { issues.push(`moeda transparente ${e.outpoint.slice(0, 16)}… não existe ou já foi gasta`); continue; }
-      if (live.get(e.outpoint) !== BigInt(e.amount)) { issues.push(`valor declarado errado em ${e.outpoint.slice(0, 16)}…`); continue; }
+      if (!live.has(e.outpoint)) { issues.push(`transparent coin ${e.outpoint.slice(0, 16)}… does not exist or was already spent`); continue; }
+      if (live.get(e.outpoint) !== BigInt(e.amount)) { issues.push(`wrong declared amount on ${e.outpoint.slice(0, 16)}…`); continue; }
       tTotal += live.get(e.outpoint);
     }
   }
-  // privadas: a saída existe, o compromisso abre no valor declarado, DLEQ confere e I não foi usada
+  // private: the output exists, the commitment opens to the declared amount, DLEQ checks out and I was not used
   const privs = (proof.private ?? []).filter((e) => {
-    if (seen.has(e.outpoint)) { issues.push(`moeda repetida ${e.outpoint.slice(0, 16)}…`); return false; }
+    if (seen.has(e.outpoint)) { issues.push(`repeated coin ${e.outpoint.slice(0, 16)}…`); return false; }
     seen.add(e.outpoint);
     return true;
   });
@@ -100,13 +100,13 @@ export async function verifyReserves(params, rpcUrl, proof, { message } = {}) {
     const byIndex = new Map(r.outputs.map((o) => [o.index, o]));
     for (const e of chunk) {
       const o = byIndex.get(Number(e.index));
-      if (!o || o.outpoint !== e.outpoint) { issues.push(`saída privada ${e.outpoint.slice(0, 16)}… não existe nesse índice`); continue; }
+      if (!o || o.outpoint !== e.outpoint) { issues.push(`private output ${e.outpoint.slice(0, 16)}… does not exist at that index`); continue; }
       const P = Point.fromBytes(fromHex(o.P)), C = Point.fromBytes(fromHex(o.C));
       let I;
-      try { I = Point.fromBytes(fromHex(e.keyImage)); } catch { issues.push('imagem de chave inválida'); continue; }
-      if (kis.has(e.keyImage)) { issues.push('imagem de chave repetida'); continue; }
-      if (!commit(BigInt(e.amount), BigInt('0x' + e.mask)).equals(C)) { issues.push(`valor declarado não abre o compromisso de ${e.outpoint.slice(0, 16)}…`); continue; }
-      if (!dleqVerify(P, I, ctxOf(params.name, proof.message, e.outpoint), e.proof)) { issues.push(`prova de posse inválida em ${e.outpoint.slice(0, 16)}…`); continue; }
+      try { I = Point.fromBytes(fromHex(e.keyImage)); } catch { issues.push('invalid key image'); continue; }
+      if (kis.has(e.keyImage)) { issues.push('repeated key image'); continue; }
+      if (!commit(BigInt(e.amount), BigInt('0x' + e.mask)).equals(C)) { issues.push(`declared amount does not open the commitment of ${e.outpoint.slice(0, 16)}…`); continue; }
+      if (!dleqVerify(P, I, ctxOf(params.name, proof.message, e.outpoint), e.proof)) { issues.push(`invalid proof of ownership on ${e.outpoint.slice(0, 16)}…`); continue; }
       kis.add(e.keyImage);
       okPriv.push(e);
     }
@@ -114,27 +114,27 @@ export async function verifyReserves(params, rpcUrl, proof, { message } = {}) {
   if (okPriv.length) {
     const st = await rpc(rpcUrl, 'getkeyimages', { keyImages: okPriv.map((e) => e.keyImage) });
     st.forEach((s, n) => {
-      if (s.spent || s.inMempool) issues.push(`moeda privada ${okPriv[n].outpoint.slice(0, 16)}… já foi gasta`);
+      if (s.spent || s.inMempool) issues.push(`private coin ${okPriv[n].outpoint.slice(0, 16)}… was already spent`);
       else sTotal += BigInt(okPriv[n].amount);
     });
   }
   const total = tTotal + sTotal;
-  if (total !== BigInt(proof.total ?? 0)) issues.push(`total declarado ${formatKRV(BigInt(proof.total ?? 0))}, total provado ${formatKRV(total)}`);
+  if (total !== BigInt(proof.total ?? 0)) issues.push(`declared total ${formatKRV(BigInt(proof.total ?? 0))}, proven total ${formatKRV(total)}`);
   return { valid: issues.length === 0, total, transparent: tTotal, private: sTotal, coins: seen.size, issues };
 }
 
-// ------------------------------------------------------------------ passivos (árvore de somas)
+// ------------------------------------------------------------------ liabilities (sum tree)
 const leafHash = (id, salt, balance) => H('reserves/leaf', id, salt, balance);
 const nodeHash = (l, r) => H('reserves/node', l.hash, l.sum, r.hash, r.sum);
 
-/** accounts: [{ id, balance (grãos) }] → { root, proofs } (uma prova por conta, para entregar ao cliente). */
+/** accounts: [{ id, balance (grains) }] → { root, proofs } (one proof per account, to hand to the customer). */
 export function buildLiabilities(accounts, { label = '' } = {}) {
-  if (!accounts.length) throw new Error('nenhuma conta');
+  if (!accounts.length) throw new Error('no accounts');
   const ids = new Set();
   const leaves = accounts.map((a) => {
     const balance = BigInt(a.balance);
-    if (balance < 0n) throw new Error(`saldo negativo na conta ${a.id}`);
-    if (ids.has(a.id)) throw new Error(`conta repetida: ${a.id}`);
+    if (balance < 0n) throw new Error(`negative balance in account ${a.id}`);
+    if (ids.has(a.id)) throw new Error(`repeated account: ${a.id}`);
     ids.add(a.id);
     const salt = randomBytes(16);
     return { id: String(a.id), salt, balance, hash: leafHash(String(a.id), salt, balance), sum: balance };
@@ -148,39 +148,39 @@ export function buildLiabilities(accounts, { label = '' } = {}) {
     levels.push(next);
   }
   const top = levels[levels.length - 1][0];
-  const root = { krevo: 'raiz-de-passivos', version: 1, label, hash: toHex(top.hash), total: top.sum.toString(), accounts: leaves.length, createdAt: Date.now() };
+  const root = { krevo: 'liabilities-root', version: 1, label, hash: toHex(top.hash), total: top.sum.toString(), accounts: leaves.length, createdAt: Date.now() };
   const proofs = leaves.map((leaf, idx) => {
     const path = [];
     let i = idx;
     for (let l = 0; l < levels.length - 1; l++) {
       const sib = i ^ 1;
       if (sib < levels[l].length) path.push({ side: sib < i ? 'L' : 'R', hash: toHex(levels[l][sib].hash), sum: levels[l][sib].sum.toString() });
-      else path.push(null); // nó ímpar sobe sozinho
+      else path.push(null); // an odd node goes up alone
       i >>= 1;
     }
-    return { krevo: 'prova-de-passivo', version: 1, rootHash: root.hash, id: leaf.id, salt: toHex(leaf.salt), balance: leaf.balance.toString(), path };
+    return { krevo: 'liability-proof', version: 1, rootHash: root.hash, id: leaf.id, salt: toHex(leaf.salt), balance: leaf.balance.toString(), path };
   });
   return { root, proofs };
 }
 
-/** O cliente confere que a SUA conta, com o SEU saldo, está somada na raiz publicada. */
+/** The customer checks that THEIR account, with THEIR balance, is summed into the published root. */
 export function verifyLiability(proof, root) {
-  if (proof.rootHash !== root.hash) return { valid: false, reason: 'a prova é de outra raiz' };
+  if (proof.rootHash !== root.hash) return { valid: false, reason: 'the proof is for another root' };
   let node = { hash: leafHash(proof.id, fromHex(proof.salt), BigInt(proof.balance)), sum: BigInt(proof.balance) };
   for (const step of proof.path) {
     if (step === null) continue;
     const sib = { hash: fromHex(step.hash), sum: BigInt(step.sum) };
-    if (sib.sum < 0n) return { valid: false, reason: 'soma negativa na árvore' };
+    if (sib.sum < 0n) return { valid: false, reason: 'negative sum in the tree' };
     node = step.side === 'L' ? { hash: nodeHash(sib, node), sum: sib.sum + node.sum } : { hash: nodeHash(node, sib), sum: node.sum + sib.sum };
   }
-  if (toHex(node.hash) !== root.hash) return { valid: false, reason: 'o caminho não leva à raiz publicada' };
-  if (node.sum.toString() !== root.total) return { valid: false, reason: 'o total não confere com a raiz' };
+  if (toHex(node.hash) !== root.hash) return { valid: false, reason: 'the path does not lead to the published root' };
+  if (node.sum.toString() !== root.total) return { valid: false, reason: 'the total does not match the root' };
   return { valid: true, balance: BigInt(proof.balance), total: BigInt(root.total) };
 }
 
 /**
- * Lê uma conta por linha: "conta;saldo" (saldo com vírgula, ex.: ana;12,5) ou "conta,saldo"
- * (saldo com ponto, ex.: ana,12.5). Ignora cabeçalho e linhas vazias.
+ * Reads one account per line: "account;balance" (balance with a decimal comma, e.g. ana;12,5) or
+ * "account,balance" (balance with a decimal point, e.g. ana,12.5). Ignores a header and empty lines.
  */
 export function parseAccountsCsv(text) {
   const out = [];
@@ -188,7 +188,7 @@ export function parseAccountsCsv(text) {
     const t = line.trim();
     if (!t || /^(conta|id|account)\s*[,;]/i.test(t)) continue;
     const parts = t.split(t.includes(';') ? ';' : ',').map((x) => x.trim());
-    if (parts.length !== 2 || !parts[0]) throw new Error(`linha inválida: "${t}" (use conta;saldo — ou conta,saldo com ponto decimal)`);
+    if (parts.length !== 2 || !parts[0]) throw new Error(`invalid line: "${t}" (use account;balance — or account,balance with a decimal point)`);
     out.push({ id: parts[0], balance: parseKRV(parts[1]) });
   }
   return out;

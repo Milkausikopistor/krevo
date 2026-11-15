@@ -1,11 +1,11 @@
-//! Núcleo criptográfico das carteiras do Krevo, em Rust, compilado para WebAssembly.
+//! Krevo wallets' cryptographic core, in Rust, compiled to WebAssembly.
 //!
-//! Reaproveita os MESMOS arquivos do nó em Rust (rust/krevod/src): corpo finito, curvas,
-//! hash, Bulletproofs, FCMP e as operações de tempo constante — uma só implementação,
-//! conferida contra o nó de referência em JavaScript.
-//! As carteiras JavaScript (CLI no Node e app no navegador) carregam o .wasm e usam estas
-//! funções para tudo o que envolve SEGREDOS: multiplicações por chaves e máscaras, assinaturas,
-//! provas de intervalo, provas de pertencimento à cadeia inteira e AES-GCM.
+//! Reuses the SAME files as the Rust node (rust/krevod/src): finite field, curves,
+//! hash, Bulletproofs, FCMP and the constant-time operations — a single implementation,
+//! checked against the JavaScript reference node.
+//! The JavaScript wallets (CLI on Node and the browser app) load the .wasm and use these
+//! functions for everything involving SECRETS: multiplications by keys and masks, signatures,
+//! range proofs, full-chain membership proofs and AES-GCM.
 
 #[path = "../../krevod/src/bytes.rs"]
 pub mod bytes;

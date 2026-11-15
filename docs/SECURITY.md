@@ -76,7 +76,7 @@ and one engine; repeat them on the target hardware.
 7. **Secrets as JavaScript strings/BigInts** (medium): seed, phrase and keys no longer live in JavaScript
    objects; the phrase is decrypted only on request; the browser wallet's data key cannot open the seed.
 8. **Wallet file written in place with default permissions** (low): atomic write, mode 0600.
-9. **Password on the command line** (low): hidden prompt or `KREVO_SENHA` instead of `--password`.
+9. **Password on the command line** (low): hidden prompt or `KREVO_PASSWORD` instead of `--password`.
 10. **Table-based AES in the browser** (medium): replaced by the bitsliced constant-time AES of the core.
 
 ## 5. Known limitations (not fixed)

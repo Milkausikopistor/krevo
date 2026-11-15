@@ -1,4 +1,4 @@
-//! Blocos, cabeçalhos e raízes de Merkle (espelha src/consensus/block.js).
+//! Blocks, headers and Merkle roots (mirrors src/consensus/block.js).
 
 use crate::bytes::*;
 use crate::hash::H;
@@ -49,7 +49,7 @@ impl Header {
         h.daa_score = r.u64()?;
         h.blue_score = r.u64()?;
         let bw = r.varbytes(64)?;
-        if !bw.is_empty() && bw[0] == 0 { return Err("blueWork não canônico".into()); }
+        if !bw.is_empty() && bw[0] == 0 { return Err("non-canonical blueWork".into()); }
         h.blue_work = BigUint::from_bytes_be(bw);
         Ok(h)
     }
@@ -88,7 +88,7 @@ impl Block {
     pub fn reset_hash(&mut self) { self.hash = OnceLock::new(); }
 }
 
-/// Raiz de Merkle sem duplicar o último nó (evita a CVE-2012-2459).
+/// Merkle root without duplicating the last node (avoids CVE-2012-2459).
 pub fn merkle_root(hashes: &[[u8; 32]]) -> [u8; 32] {
     if hashes.is_empty() { return [0u8; 32]; }
     let mut level: Vec<[u8; 32]> = hashes.to_vec();
@@ -102,7 +102,7 @@ pub fn merkle_root(hashes: &[[u8; 32]]) -> [u8; 32] {
     H::new("merkle/root").b(&level[0]).n(hashes.len() as u64).d32()
 }
 
-/// Prova de inclusão: { index, count, path: [hex | null] }.
+/// Inclusion proof: { index, count, path: [hex | null] }.
 pub fn merkle_proof(hashes: &[[u8; 32]], index: usize) -> serde_json::Value {
     let mut path = vec![];
     let mut level: Vec<[u8; 32]> = hashes.to_vec();

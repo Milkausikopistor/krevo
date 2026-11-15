@@ -1,15 +1,15 @@
-// Bitcoin SIMULADO (estilo regtest) com a mesma API REST do mempool.space/Esplora.
+// SIMULATED Bitcoin (regtest style) with the same REST API as mempool.space/Esplora.
 //
-// Serve para testar e demonstrar trocas atômicas sem dinheiro de verdade e sem instalar o
-// Bitcoin Core. Não é um nó Bitcoin: não há mineração real nem rede P2P. Mas ele VALIDA de
-// verdade o que importa para a troca:
-//   • entradas existentes e não gastas (sem gasto duplo), soma das saídas ≤ entradas;
-//   • nLockTime/finalidade pela mediana dos 11 últimos blocos (BIP-113);
-//   • execução do witnessScript (P2WSH) com OP_IF/OP_SIZE/OP_SHA256/OP_CHECKLOCKTIMEVERIFY/
-//     OP_CHECKSIG, regras MINIMALIF, CLEANSTACK, NULLFAIL, S baixo e DER estrito;
-//   • assinaturas ECDSA sobre o hash segwit v0 (BIP-143) — o mesmo código conferido com os
-//     vetores oficiais do BIP-143.
-// Uso: `krevo btc-simulado` (porta 3002) — e as carteiras usam --btc-api http://127.0.0.1:3002.
+// Used to test and demonstrate atomic swaps without real money and without installing
+// Bitcoin Core. It is not a Bitcoin node: there is no real mining and no P2P network. But it
+// really VALIDATES what matters for the swap:
+//   • existing, unspent inputs (no double spend), sum of outputs ≤ inputs;
+//   • nLockTime/finality by the median of the last 11 blocks (BIP-113);
+//   • execution of the witnessScript (P2WSH) with OP_IF/OP_SIZE/OP_SHA256/OP_CHECKLOCKTIMEVERIFY/
+//     OP_CHECKSIG, MINIMALIF, CLEANSTACK, NULLFAIL, low-S and strict-DER rules;
+//   • ECDSA signatures over the segwit v0 hash (BIP-143) — the same code checked against the
+//     official BIP-143 vectors.
+// Usage: `krevo btc-sim` (port 3002) — and the wallets use --btc-api http://127.0.0.1:3002.
 
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -29,48 +29,48 @@ function castToBool(b) {
 
 function checkSig(sig, pub, scriptCode, tx, index, amount) {
   if (!sig.length) return false;
-  if (sig[sig.length - 1] !== 1) throw new Error('o simulador só aceita SIGHASH_ALL');
+  if (sig[sig.length - 1] !== 1) throw new Error('the simulator only accepts SIGHASH_ALL');
   const rs = derDecode(sig.subarray(0, -1));
-  if (!isLowS(rs)) throw new Error('assinatura com S alto (não padrão)');
-  if (pub.length !== 33) throw new Error('segwit exige chave pública comprimida');
-  if (!ecdsaVerify(pub, tx.sighashV0(index, scriptCode, amount), rs)) throw new Error('NULLFAIL: assinatura inválida');
+  if (!isLowS(rs)) throw new Error('signature with high S (non-standard)');
+  if (pub.length !== 33) throw new Error('segwit requires a compressed public key');
+  if (!ecdsaVerify(pub, tx.sighashV0(index, scriptCode, amount), rs)) throw new Error('NULLFAIL: invalid signature');
   return true;
 }
 
-/** Executa um witnessScript (segwit v0). Lança erro se o gasto não for válido. */
+/** Runs a witnessScript (segwit v0). Throws if the spend is not valid. */
 export function runWitnessScript(script, items, { tx, index, amount }) {
   const stack = items.map((b) => Buffer.from(b));
   const exec = [];
-  const pop = () => { if (!stack.length) throw new Error('pilha vazia'); return stack.pop(); };
-  const top = () => { if (!stack.length) throw new Error('pilha vazia'); return stack[stack.length - 1]; };
+  const pop = () => { if (!stack.length) throw new Error('empty stack'); return stack.pop(); };
+  const top = () => { if (!stack.length) throw new Error('empty stack'); return stack[stack.length - 1]; };
   for (const { op, data } of parseScript(script)) {
     const running = exec.every(Boolean);
     if (op === OP.OP_IF || op === OP.OP_NOTIF) {
       let v = false;
       if (running) {
         const c = pop();
-        if (c.length > 1 || (c.length === 1 && c[0] !== 1)) throw new Error('MINIMALIF: o argumento do OP_IF deve ser vazio ou 01');
+        if (c.length > 1 || (c.length === 1 && c[0] !== 1)) throw new Error('MINIMALIF: the OP_IF argument must be empty or 01');
         v = c.length === 1;
         if (op === OP.OP_NOTIF) v = !v;
       }
       exec.push(v);
       continue;
     }
-    if (op === OP.OP_ELSE) { if (!exec.length) throw new Error('OP_ELSE sem OP_IF'); exec[exec.length - 1] = !exec[exec.length - 1]; continue; }
-    if (op === OP.OP_ENDIF) { if (!exec.length) throw new Error('OP_ENDIF sem OP_IF'); exec.pop(); continue; }
+    if (op === OP.OP_ELSE) { if (!exec.length) throw new Error('OP_ELSE without OP_IF'); exec[exec.length - 1] = !exec[exec.length - 1]; continue; }
+    if (op === OP.OP_ENDIF) { if (!exec.length) throw new Error('OP_ENDIF without OP_IF'); exec.pop(); continue; }
     if (!running) continue;
     if (data !== undefined) { stack.push(data); continue; }
     if (op === OP.OP_0) { stack.push(FALSE()); continue; }
     if (op >= OP.OP_1 && op <= OP.OP_16) { stack.push(scriptNum(op - 0x50)); continue; }
     switch (op) {
-      case OP.OP_VERIFY: if (!castToBool(pop())) throw new Error('OP_VERIFY falhou'); break;
+      case OP.OP_VERIFY: if (!castToBool(pop())) throw new Error('OP_VERIFY failed'); break;
       case OP.OP_DROP: pop(); break;
       case OP.OP_DUP: stack.push(Buffer.from(top())); break;
       case OP.OP_SIZE: stack.push(scriptNum(top().length)); break;
       case OP.OP_EQUAL:
       case OP.OP_EQUALVERIFY: {
         const eq = pop().equals(pop());
-        if (op === OP.OP_EQUALVERIFY) { if (!eq) throw new Error('OP_EQUALVERIFY falhou (segredo ou tamanho errado?)'); }
+        if (op === OP.OP_EQUALVERIFY) { if (!eq) throw new Error('OP_EQUALVERIFY failed (wrong secret or size?)'); }
         else stack.push(eq ? TRUE() : FALSE());
         break;
       }
@@ -84,18 +84,18 @@ export function runWitnessScript(script, items, { tx, index, amount }) {
       case OP.OP_CHECKLOCKTIMEVERIFY: {
         const lt = decodeScriptNum(top(), 5);
         const txLt = BigInt(tx.locktime);
-        if (lt < 0n) throw new Error('CLTV com prazo negativo');
-        if ((lt < 500_000_000n) !== (txLt < 500_000_000n)) throw new Error('CLTV: tipos de prazo diferentes');
-        if (lt > txLt) throw new Error('CLTV: o nLockTime da transação é anterior ao prazo do contrato');
-        if (tx.inputs[index].sequence === 0xffffffff) throw new Error('CLTV: nSequence não pode ser final');
+        if (lt < 0n) throw new Error('CLTV with a negative deadline');
+        if ((lt < 500_000_000n) !== (txLt < 500_000_000n)) throw new Error('CLTV: different deadline types');
+        if (lt > txLt) throw new Error('CLTV: the transaction\'s nLockTime is before the contract\'s deadline');
+        if (tx.inputs[index].sequence === 0xffffffff) throw new Error('CLTV: nSequence cannot be final');
         break;
       }
-      default: throw new Error(`opcode 0x${op.toString(16)} não suportado pelo simulador`);
+      default: throw new Error(`opcode 0x${op.toString(16)} not supported by the simulator`);
     }
   }
-  if (exec.length) throw new Error('OP_IF sem OP_ENDIF');
-  if (stack.length !== 1) throw new Error('CLEANSTACK: a pilha deve terminar com um único elemento');
-  if (!castToBool(stack[0])) throw new Error('o script terminou com falso');
+  if (exec.length) throw new Error('OP_IF without OP_ENDIF');
+  if (stack.length !== 1) throw new Error('CLEANSTACK: the stack must end with a single element');
+  if (!castToBool(stack[0])) throw new Error('the script ended with false');
 }
 
 export class SimBitcoin {
@@ -104,10 +104,10 @@ export class SimBitcoin {
     this.blocks = [];
     this.txs = new Map();      // txid → { tx, prevouts, height (null = mempool) }
     this.utxos = new Map();    // "txid:vout" → { txid, vout, value, script }
-    this.spentBy = new Map();  // "txid:vout" → txid que gastou
-    this.byAddr = new Map();   // endereço → [txid]
+    this.spentBy = new Map();  // "txid:vout" → txid that spent it
+    this.byAddr = new Map();   // address → [txid]
     this.mempool = [];
-    // 11 blocos iniciais, para a mediana de tempo já fazer sentido
+    // 11 initial blocks, so the median time already makes sense
     for (let i = 10; i >= 0; i--) this._block(time - i * spacing);
   }
 
@@ -125,7 +125,7 @@ export class SimBitcoin {
     this.blocks.push({ height, hash, time, txids });
   }
 
-  /** Mineira n blocos; dt = segundos entre blocos (padrão: acompanha o relógio real). */
+  /** Mines n blocks; dt = seconds between blocks (default: follows the real clock). */
   mine(n = 1, dt) {
     for (let i = 0; i < n; i++) {
       const t = dt === undefined ? Math.max(this.tip.time + 1, Math.floor(Date.now() / 1000)) : this.tip.time + dt;
@@ -157,7 +157,7 @@ export class SimBitcoin {
     this.mempool.push(txid);
   }
 
-  /** "Torneira": cria moedas num endereço (como se alguém tivesse pago de outra carteira). */
+  /** "Faucet": creates coins at an address (as if someone had paid from another wallet). */
   fund(address, sats) {
     const script = decodeBtcAddress(this.net, address).script;
     const tx = new BtcTx({ inputs: [{ txid: '00'.repeat(32), vout: 0xffffffff, scriptSig: randomBytes(8) }], outputs: [{ value: BigInt(sats), script }] });
@@ -166,47 +166,47 @@ export class SimBitcoin {
     return txid;
   }
 
-  /** Recebe uma transação (hex). Lança erro com o motivo se for inválida. */
+  /** Receives a transaction (hex). Throws with the reason if it is invalid. */
   submit(txHex) {
     const tx = BtcTx.parse(txHex);
     const txid = tx.txid;
     if (this.txs.has(txid)) return txid;
-    if (!tx.inputs.length || !tx.outputs.length) throw new Error('transação sem entradas ou sem saídas');
+    if (!tx.inputs.length || !tx.outputs.length) throw new Error('transaction without inputs or without outputs');
     const prevouts = [];
     const seen = new Set();
     let inSum = 0n;
     for (const inp of tx.inputs) {
       const k = `${inp.txid}:${inp.vout}`;
-      if (seen.has(k)) throw new Error('entrada duplicada');
+      if (seen.has(k)) throw new Error('duplicate input');
       seen.add(k);
-      if (this.spentBy.has(k)) throw new Error('conflito: essa saída já foi gasta');
+      if (this.spentBy.has(k)) throw new Error('conflict: that output was already spent');
       const u = this.utxos.get(k);
-      if (!u) throw new Error('entrada inexistente');
+      if (!u) throw new Error('nonexistent input');
       prevouts.push(u);
       inSum += u.value;
     }
     if (tx.locktime !== 0 && tx.inputs.some((i) => i.sequence !== 0xffffffff)) {
       const lt = tx.locktime;
       const ok = lt < 500_000_000 ? lt < this.tip.height + 1 : lt < this.mtp();
-      if (!ok) throw new Error('non-final: o prazo (nLockTime) ainda não passou');
+      if (!ok) throw new Error('non-final: the deadline (nLockTime) has not passed yet');
     }
     tx.inputs.forEach((inp, n) => {
       const spk = prevouts[n].script, w = inp.witness;
-      if (inp.scriptSig.length) throw new Error('entrada segwit não pode ter scriptSig');
+      if (inp.scriptSig.length) throw new Error('a segwit input cannot have a scriptSig');
       if (spk.length === 34 && spk[0] === 0 && spk[1] === 32) {
         if (!w.length) throw new Error('testemunha ausente');
         const ws = w[w.length - 1];
-        if (!sha256(ws).equals(spk.subarray(2))) throw new Error('o witnessScript não confere com o endereço');
+        if (!sha256(ws).equals(spk.subarray(2))) throw new Error('the witnessScript does not match the address');
         runWitnessScript(ws, w.slice(0, -1), { tx, index: n, amount: prevouts[n].value });
       } else if (spk.length === 22 && spk[0] === 0 && spk[1] === 20) {
-        if (w.length !== 2 || !hash160(w[1]).equals(spk.subarray(2))) throw new Error('testemunha P2WPKH inválida');
+        if (w.length !== 2 || !hash160(w[1]).equals(spk.subarray(2))) throw new Error('invalid P2WPKH witness');
         const code = Buffer.concat([Buffer.from([0x76, 0xa9, 0x14]), spk.subarray(2), Buffer.from([0x88, 0xac])]);
-        if (!checkSig(w[0], w[1], code, tx, n, prevouts[n].value)) throw new Error('assinatura inválida');
-      } else throw new Error('o simulador só valida gastos segwit v0 (P2WSH/P2WPKH)');
+        if (!checkSig(w[0], w[1], code, tx, n, prevouts[n].value)) throw new Error('invalid signature');
+      } else throw new Error('the simulator only validates segwit v0 spends (P2WSH/P2WPKH)');
     });
     const outSum = tx.outputs.reduce((a, o) => a + o.value, 0n);
-    if (outSum > inSum) throw new Error('saídas maiores que as entradas');
-    if (tx.outputs.some((o) => o.value < 294n)) throw new Error('saída abaixo do limite de poeira');
+    if (outSum > inSum) throw new Error('outputs larger than the inputs');
+    if (tx.outputs.some((o) => o.value < 294n)) throw new Error('output below the dust limit');
     this._accept(txid, tx, prevouts);
     return txid;
   }
@@ -247,11 +247,11 @@ export class SimBitcoin {
 
   addressTxs(address) { return [...(this.byAddr.get(address) ?? [])].reverse().map((id) => this.txJson(id)); }
 
-  /** Saldo (confirmado + mempool) de um endereço — conveniência para testes e demonstrações. */
+  /** Balance (confirmed + mempool) of an address — a convenience for tests and demos. */
   balance(address) { return this.addressUtxos(address).reduce((a, u) => a + BigInt(u.value), 0n); }
 }
 
-/** Sobe o servidor HTTP com a API Esplora. autoMineMs > 0 mineira um bloco a cada intervalo. */
+/** Starts the HTTP server with the Esplora API. autoMineMs > 0 mines a block every interval. */
 export function startSimBitcoin({ port = 3002, host = '127.0.0.1', sim = new SimBitcoin(), autoMineMs = 0, log = () => {} } = {}) {
   const send = (res, code, body, type = 'application/json') => {
     res.writeHead(code, { 'content-type': type });
@@ -302,7 +302,7 @@ export function startSimBitcoin({ port = 3002, host = '127.0.0.1', sim = new Sim
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {
-      if (autoMineMs > 0) timer = setInterval(() => { const r = sim.mine(1); log(`bloco ${r.height}`); }, autoMineMs);
+      if (autoMineMs > 0) timer = setInterval(() => { const r = sim.mine(1); log(`block ${r.height}`); }, autoMineMs);
       const addr = server.address();
       resolve({
         sim, server, url: `http://${host}:${addr.port}`,

@@ -1,11 +1,11 @@
-//! Operações da carteira com SEGREDOS, em tempo constante (compartilhado pelo nó e pelo módulo
-//! WebAssembly das carteiras):
-//!   • Schnorr com nonce "hedged" (determinístico + aleatório) e verificação após assinar;
-//!   • compromissos e multiplicações por escalares secretos (chave de gasto, chave de
-//!     visualização, máscaras) em tempo constante;
-//!   • prova de intervalo (Bulletproofs) e prova FCMP completa, autoverificadas antes de sair.
-//! Uma falha de hardware ou de memória durante a assinatura poderia vazar a chave; verificar o
-//! resultado antes de devolvê-lo impede que uma assinatura defeituosa saia do aparelho.
+//! Wallet operations with SECRETS, in constant time (shared by the node and by the
+//! wallets' WebAssembly module):
+//!   • Schnorr with a "hedged" nonce (deterministic + random) and verification after signing;
+//!   • commitments and multiplications by secret scalars (spend key, view
+//!     key, masks) in constant time;
+//!   • range proof (Bulletproofs) and full FCMP proof, self-checked before returning.
+//! A hardware or memory fault during signing could leak the key; verifying the
+//! result before returning it prevents a faulty signature from leaving the device.
 
 use crate::crypto::*;
 use crate::ct::{ct_mul, CtFixed, PP};
@@ -17,21 +17,21 @@ use std::sync::OnceLock;
 fn g_ct() -> &'static CtFixed<Secp> { static T: OnceLock<CtFixed<Secp>> = OnceLock::new(); T.get_or_init(|| CtFixed::new(&g())) }
 fn h_ct() -> &'static CtFixed<Secp> { static T: OnceLock<CtFixed<Secp>> = OnceLock::new(); T.get_or_init(|| CtFixed::new(&hv())) }
 
-/// k·G em tempo constante.
+/// k·G in constant time.
 pub fn mul_g_ct(k: &Sc) -> P1 { g_ct().mul(k) }
-/// k·H (gerador de valor) em tempo constante.
+/// k·H (value generator) in constant time.
 pub fn mul_h_ct(k: &Sc) -> P1 { h_ct().mul(k) }
-/// C = x·G + v·H em tempo constante.
+/// C = x·G + v·H in constant time.
 pub fn commit_ct(v: &Sc, x: &Sc) -> P1 { mul_g_ct(x).add(&mul_h_ct(v)) }
-/// k·P em tempo constante (P público).
+/// k·P in constant time (public P).
 pub fn mul_ct(p: &P1, k: &Sc) -> P1 { ct_mul(p, k) }
-/// Imagem de chave p·Hp(P).
+/// Key image p·Hp(P).
 pub fn key_image(p: &Sc, pk: &P1) -> P1 { ct_mul(&hash_point_for_key_image(pk), p) }
 
-fn rand32() -> [u8; 32] { let mut b = [0u8; 32]; getrandom::fill(&mut b).expect("aleatoriedade do sistema"); b }
+fn rand32() -> [u8; 32] { let mut b = [0u8; 32]; getrandom::fill(&mut b).expect("system randomness"); b }
 
-/// Nonce "hedged": seguro mesmo com gerador aleatório falho (vira determinístico) e mesmo com
-/// falha de determinismo (o acaso protege contra ataques de falha).
+/// "Hedged" nonce: safe even with a faulty random generator (it becomes deterministic) and even with
+/// a determinism fault (the randomness protects against fault attacks).
 pub fn hedged(domain: &str, secret: &[&[u8]], msg: &[u8]) -> Sc {
     for ctr in 0u64.. {
         let mut h = H::new(domain);
@@ -42,9 +42,9 @@ pub fn hedged(domain: &str, secret: &[&[u8]], msg: &[u8]) -> Sc {
     unreachable!()
 }
 
-/// Assinatura Schnorr (e, s) — mesmo formato de src/crypto/schnorr.js.
+/// Schnorr signature (e, s) — same format as src/crypto/schnorr.js.
 pub fn schnorr_sign(x: &Sc, msg: &[u8], domain: &str) -> Result<[u8; 64], String> {
-    if x.is_zero() { return Err("chave secreta zero".into()); }
+    if x.is_zero() { return Err("zero secret key".into()); }
     let p = mul_g_ct(x);
     let pb = p.to_bytes();
     let dom = format!("schnorr/{domain}");
@@ -57,20 +57,20 @@ pub fn schnorr_sign(x: &Sc, msg: &[u8], domain: &str) -> Result<[u8; 64], String
         let mut sig = [0u8; 64];
         sig[..32].copy_from_slice(&e.to_be_bytes());
         sig[32..].copy_from_slice(&s.to_be_bytes());
-        if !schnorr_verify(&p, msg, &sig, domain) { return Err("falha ao assinar (verificação da própria assinatura)".into()); }
+        if !schnorr_verify(&p, msg, &sig, domain) { return Err("signing failed (verification of the signature itself)".into()); }
         return Ok(sig);
     }
-    Err("não foi possível assinar".into())
+    Err("could not sign".into())
 }
 
-// ------------------------------------------------------------------ prova de intervalo
+// ------------------------------------------------------------------ range proof
 fn inner(a: &[Sc], b: &[Sc]) -> Sc { a.iter().zip(b).fold(Sc::ZERO, |s, (x, y)| s + *x * *y) }
 
-/// Prova agregada de que cada v ∈ [0, 2⁶⁴) (espelha proveRange de src/crypto/bulletproofs.js).
-/// Devolve (compromissos V, prova). Autoverificada.
+/// Aggregated proof that each v ∈ [0, 2⁶⁴) (mirrors proveRange from src/crypto/bulletproofs.js).
+/// Returns (commitments V, proof). Self-checked.
 pub fn range_prove(values: &[u64], gammas: &[Sc]) -> Result<(Vec<P1>, Vec<u8>), String> {
     let m0 = values.len();
-    if m0 < 1 || m0 > BP_MAX_AGG || gammas.len() != m0 { return Err("bp: número de valores inválido".into()); }
+    if m0 < 1 || m0 > BP_MAX_AGG || gammas.len() != m0 { return Err("bp: invalid number of values".into()); }
     let m = m0.next_power_of_two();
     let nn = BP_BITS * m;
     let (gi, hi, ub) = bp_ensure(nn);
@@ -84,8 +84,8 @@ pub fn range_prove(values: &[u64], gammas: &[Sc]) -> Result<(Vec<P1>, Vec<u8>), 
     let mut ar = vec![Sc::ZERO; nn];
     let mut bits = vec![0u64; nn];
     for j in 0..m { for i in 0..BP_BITS { let b = (v[j] >> i) & 1; bits[j * BP_BITS + i] = b; al[j * BP_BITS + i] = Sc::from_u64(b); ar[j * BP_BITS + i] = Sc::from_u64(b) - one; } }
-    // Nonces de uma semente "hedged" (máscaras + valores + compromissos + acaso): mesmo com o
-    // gerador aleatório quebrado, nada se repete entre provas diferentes, e valores não vazam.
+    // Nonces from a "hedged" seed (masks + values + commitments + randomness): even with a
+    // broken random generator, nothing repeats across different proofs, and values do not leak.
     let secret: Vec<u8> = gamma.iter().flat_map(|g| g.to_be_bytes()).chain(v.iter().flat_map(|x| x.to_le_bytes())).collect();
     let publics: Vec<u8> = vs.iter().flat_map(|p| p.to_bytes()).collect();
     let seed = hedged("bp/seed", &[&secret], &publics).to_be_bytes();
@@ -93,7 +93,7 @@ pub fn range_prove(values: &[u64], gammas: &[Sc]) -> Result<(Vec<P1>, Vec<u8>), 
     let (alpha, rho) = (nonce("alpha", 0), nonce("rho", 0));
     let sl: Vec<Sc> = (0..nn).map(|i| nonce("sL", i)).collect();
     let sr: Vec<Sc> = (0..nn).map(|i| nonce("sR", i)).collect();
-    // A = α·G + Σ bit·G_i − Σ (1 − bit)·H_i — somas completas escolhidas por máscara (bits secretos)
+    // A = α·G + Σ bit·G_i − Σ (1 − bit)·H_i — complete additions chosen by mask (secret bits)
     let mut acc = PP::from_pt(&mul_g_ct(&alpha));
     for i in 0..nn {
         let mask = crate::field::ct_mask(bits[i]);
@@ -107,7 +107,7 @@ pub fn range_prove(values: &[u64], gammas: &[Sc]) -> Result<(Vec<P1>, Vec<u8>), 
     let mut ps = vec![g()];
     ps.extend(&gi);
     ps.extend(&hi);
-    let s = msm(&ks, &ps); // vetores aleatórios: tempo variável não revela a testemunha
+    let s = msm(&ks, &ps); // random vectors: variable timing does not reveal the witness
 
     let mut tr = BpTr::new("rangeproof");
     tr.add("bits", TrX::N(BP_BITS as u64));
@@ -115,8 +115,8 @@ pub fn range_prove(values: &[u64], gammas: &[Sc]) -> Result<(Vec<P1>, Vec<u8>), 
     for x in &vs { tr.add("V", TrX::P(x)); }
     tr.add("A", TrX::P(&a));
     tr.add("S", TrX::P(&s));
-    let y = tr.ch("y").ok_or("desafio zero")?;
-    let z = tr.ch("z").ok_or("desafio zero")?;
+    let y = tr.ch("y").ok_or("zero challenge")?;
+    let z = tr.ch("z").ok_or("zero challenge")?;
     let mut yp = vec![Sc::ONE; nn];
     for i in 1..nn { yp[i] = yp[i - 1] * y; }
     let mut zp = vec![Sc::ONE; m + 3];
@@ -139,7 +139,7 @@ pub fn range_prove(values: &[u64], gammas: &[Sc]) -> Result<(Vec<P1>, Vec<u8>), 
     let tp2 = commit_ct(&t2, &tau2);
     tr.add("T1", TrX::P(&tp1));
     tr.add("T2", TrX::P(&tp2));
-    let x = tr.ch("x").ok_or("desafio zero")?;
+    let x = tr.ch("x").ok_or("zero challenge")?;
     let mut taux = tau2 * x * x + tau1 * x;
     for j in 0..m { taux = taux + zp[2 + j] * gamma[j]; }
     let mu = alpha + rho * x;
@@ -149,7 +149,7 @@ pub fn range_prove(values: &[u64], gammas: &[Sc]) -> Result<(Vec<P1>, Vec<u8>), 
     tr.add("taux", TrX::S(&taux));
     tr.add("mu", TrX::S(&mu));
     tr.add("that", TrX::S(&that));
-    let w = tr.ch("w").ok_or("desafio zero")?;
+    let w = tr.ch("w").ok_or("zero challenge")?;
     let q = ub.mul(&w);
     let yinv = y.invert();
     let mut ypinv = vec![Sc::ONE; nn];
@@ -172,7 +172,7 @@ pub fn range_prove(values: &[u64], gammas: &[Sc]) -> Result<(Vec<P1>, Vec<u8>), 
         tr.add("R", TrX::P(&rk));
         ls.push(lk);
         rs.push(rk);
-        let u = tr.ch("u").ok_or("desafio zero")?;
+        let u = tr.ch("u").ok_or("zero challenge")?;
         let ui = u.invert();
         gv = (0..h2).map(|i| gv[i].mul(&ui).add(&gv[h2 + i].mul(&u)).normalize()).collect();
         hvv = (0..h2).map(|i| hvv[i].mul(&u).add(&hvv[h2 + i].mul(&ui)).normalize()).collect();
@@ -185,21 +185,21 @@ pub fn range_prove(values: &[u64], gammas: &[Sc]) -> Result<(Vec<P1>, Vec<u8>), 
     for k in 0..ls.len() { proof.extend_from_slice(&ls[k].to_bytes()); proof.extend_from_slice(&rs[k].to_bytes()); }
     proof.extend_from_slice(&av[0].to_be_bytes());
     proof.extend_from_slice(&bv[0].to_be_bytes());
-    if !verify_range(&vs, &proof) { return Err("falha na prova de intervalo (autoverificação)".into()); }
+    if !verify_range(&vs, &proof) { return Err("range proof failed (self-check)".into()); }
     Ok((vs, proof))
 }
 
-// ------------------------------------------------------------------ prova FCMP completa
-/// Prova completa de uma entrada (as duas metades + a prova de posse), autoverificada.
-/// p: chave de uso único; x, v: cegamento e valor do compromisso; pseudo_mask; msg = sighash.
-/// Devolve (prova, imagem de chave, pseudo-compromisso).
+// ------------------------------------------------------------------ full FCMP proof
+/// Full proof of an input (the two halves + the ownership proof), self-checked.
+/// p: one-time key; x, v: blinding and amount of the commitment; pseudo_mask; msg = sighash.
+/// Returns (proof, key image, pseudo-commitment).
 pub fn fcmp_prove_full(job: &ProveJob, p: &Sc, x: &Sc, v: u64, pseudo_mask: &Sc, msg: &[u8]) -> Result<(Vec<u8>, [u8; 33], [u8; 33]), String> {
     let (head, phat, ihat, chat, root) = prover_statement(job)?;
     let e1 = prove_half(job, Half::E1)?;
     let e2 = prove_half(job, Half::E2)?;
     let mut bps = e1;
     bps.extend(e2);
-    let pk = P1::from_bytes(&job.p).ok_or("saída inválida")?;
+    let pk = P1::from_bytes(&job.p).ok_or("invalid output")?;
     let ki = key_image(p, &pk);
     let pseudo = commit_ct(&Sc::from_u64(v), pseudo_mask);
     let d = chat.sub(&pseudo);
@@ -211,27 +211,27 @@ pub fn fcmp_prove_full(job: &ProveJob, p: &Sc, x: &Sc, v: u64, pseudo_mask: &Sc,
     proof.extend(gsp);
     let mut batch = FcmpBatch::new();
     fcmp_verify_into(&mut batch, job.branch, job.n, &root, &proof, &ki, &pseudo, msg)?;
-    if !batch.check() { return Err("falha na prova de pertencimento (autoverificação)".into()); }
+    if !batch.check() { return Err("membership proof failed (self-check)".into()); }
     Ok((proof, ki.to_bytes(), pseudo.to_bytes()))
 }
 
 // ------------------------------------------------------------------ ML-DSA-44 (FIPS 204)
-/// Chave a partir da semente ξ (ML-DSA.KeyGen_internal) — a mesma do OpenSSL com PKCS#8 "só semente".
+/// Key from the seed ξ (ML-DSA.KeyGen_internal) — the same as OpenSSL's with a "seed only" PKCS#8.
 pub fn mldsa_key(seed: &[u8]) -> (Vec<u8>, ml_dsa::SigningKey<ml_dsa::MlDsa44>) {
     use ml_dsa::{Keypair, MlDsa44, Seed, SigningKey};
     let xi: Seed = Seed::try_from(seed).expect("32 bytes");
     let sk = SigningKey::<MlDsa44>::from_seed(&xi);
     (sk.verifying_key().encode().to_vec(), sk)
 }
-/// Assinatura ML-DSA "hedged" (FIPS 204, algoritmo 2, contexto vazio), conferida antes de sair.
+/// "Hedged" ML-DSA signature (FIPS 204, algorithm 2, empty context), checked before returning.
 pub fn mldsa_sign(seed: &[u8], msg: &[u8]) -> Result<Vec<u8>, String> {
     let (pk, sk) = mldsa_key(seed);
     let mut rnd = [0u8; 32];
-    getrandom::fill(&mut rnd).map_err(|_| "aleatoriedade indisponível")?;
+    getrandom::fill(&mut rnd).map_err(|_| "randomness unavailable")?;
     let rnd = ml_dsa::B32::try_from(&rnd[..]).expect("32 bytes");
-    // M' = 0 ‖ |ctx| ‖ ctx ‖ M, com ctx vazio (assinatura "pura", como o OpenSSL)
+    // M' = 0 ‖ |ctx| ‖ ctx ‖ M, with an empty ctx ("pure" signature, like OpenSSL)
     let sig = sk.expanded_key().sign_internal(&[&[0u8, 0u8], msg], &rnd).encode().to_vec();
-    if !crate::crypto::mldsa_verify(&pk, msg, &sig) { return Err("falha ao assinar (ML-DSA)".into()); }
+    if !crate::crypto::mldsa_verify(&pk, msg, &sig) { return Err("signing failed (ML-DSA)".into()); }
     Ok(sig)
 }
 
@@ -243,9 +243,9 @@ mod tests {
     #[test]
     fn schnorr_and_range_proofs() {
         let x = Sc::random();
-        let sig = schnorr_sign(&x, b"mensagem", "sig").unwrap();
-        assert!(schnorr_verify(&mul_g(&x), b"mensagem", &sig, "sig"));
-        assert!(!schnorr_verify(&mul_g(&x), b"outra", &sig, "sig"));
+        let sig = schnorr_sign(&x, b"message", "sig").unwrap();
+        assert!(schnorr_verify(&mul_g(&x), b"message", &sig, "sig"));
+        assert!(!schnorr_verify(&mul_g(&x), b"other", &sig, "sig"));
         let (vs, proof) = range_prove(&[5000, 7, u64::MAX], &[Sc::random(), Sc::random(), Sc::random()]).unwrap();
         assert!(verify_range(&vs, &proof));
         assert!(mul_ct(&g(), &x).eq(&mul_g(&x)) && mul_h_ct(&x).eq(&hv().mul(&x)));

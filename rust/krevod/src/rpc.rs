@@ -1,6 +1,6 @@
-//! JSON-RPC sobre HTTP (espelha src/node/rpc.js): os mesmos métodos e as mesmas respostas —
-//! BigInt do JavaScript vira texto, Buffer vira hexadecimal — para que carteiras, servidor leve,
-//! explorador e mineradores do projeto funcionem com o nó em Rust sem mudanças.
+//! JSON-RPC over HTTP (mirrors src/node/rpc.js): the same methods and the same responses —
+//! a JavaScript BigInt becomes text, a Buffer becomes hexadecimal — so that the project's wallets, light server,
+//! explorer and miners work with the Rust node unchanged.
 
 use crate::block::{merkle_proof, Block};
 use crate::bytes::{from_hex, from_hex32, to_hex};
@@ -31,11 +31,11 @@ pub fn start(shared: Shared, host: &str, port: u16) -> std::io::Result<()> {
 }
 
 fn serve(shared: Shared, s: TcpStream) {
-    let _ = s.set_read_timeout(Some(Duration::from_secs(5))); // como o keep-alive do Node.js
+    let _ = s.set_read_timeout(Some(Duration::from_secs(5))); // like Node.js keep-alive
     let mut w = match s.try_clone() { Ok(x) => x, Err(_) => return };
     let mut r = BufReader::new(s);
     loop {
-        // linhas e cabeçalhos limitados: um cliente hostil não faz o nó guardar dados sem fim
+        // limited lines and headers: a hostile client cannot make the node store endless data
         let mut line = String::new();
         if (&mut r).take(8192).read_line(&mut line).unwrap_or(0) == 0 || !line.ends_with('\n') { return; }
         let method = line.split_whitespace().next().unwrap_or("").to_string();
@@ -65,12 +65,12 @@ fn serve(shared: Shared, s: TcpStream) {
 }
 
 fn handle(shared: &Shared, body: &[u8]) -> String {
-    let msg: Value = match serde_json::from_slice(body) { Ok(v) => v, Err(e) => return json!({ "id": null, "error": format!("JSON inválido: {e}") }).to_string() };
+    let msg: Value = match serde_json::from_slice(body) { Ok(v) => v, Err(e) => return json!({ "id": null, "error": format!("invalid JSON: {e}") }).to_string() };
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
     let method = msg["method"].as_str().unwrap_or("").to_string();
     let params = msg.get("params").cloned().filter(|p| p.is_object()).unwrap_or(json!({}));
     let (lock, cv) = &**shared;
-    // getblocktemplate com long polling: espera (sem segurar o nó) até o modelo mudar, no máximo 1 s
+    // getblocktemplate with long polling: waits (without holding the node) until the template changes, at most 1 s
     if method == "getblocktemplate" {
         if let Some(lp) = params["longpollid"].as_str() {
             let g = lock_node(lock);
@@ -95,7 +95,7 @@ fn template_id(n: &Node) -> String { format!("{}-{}", n.c.virtual_version, n.mem
 fn s(v: u64) -> Value { Value::String(v.to_string()) }
 fn hx(b: &[u8]) -> Value { Value::String(to_hex(b)) }
 fn p_u64(p: &Value, k: &str, d: u64) -> u64 { p.get(k).and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.parse().ok()))).unwrap_or(d) }
-fn p_str<'a>(p: &'a Value, k: &str) -> Result<&'a str, String> { p.get(k).and_then(|x| x.as_str()).ok_or_else(|| format!("parâmetro ausente: {k}")) }
+fn p_str<'a>(p: &'a Value, k: &str) -> Result<&'a str, String> { p.get(k).and_then(|x| x.as_str()).ok_or_else(|| format!("missing parameter: {k}")) }
 fn h32(sv: &str) -> Result<Hash, String> { from_hex32(sv) }
 
 fn shielded_entry(n: &Node, index: usize) -> Value {
@@ -116,7 +116,7 @@ fn check_name(raw: &str) -> Result<String, String> {
     let mut nm = raw.trim().to_lowercase();
     if let Some(x) = nm.strip_prefix('@') { nm = x.to_string(); }
     if !is_valid_name(nm.as_bytes()) {
-        return Err(format!("nome inválido \"{raw}\": use de 3 a 32 caracteres entre a-z, 0-9 e hífen (sem acento, sem começar ou terminar com hífen e sem \"--\")"));
+        return Err(format!("invalid name \"{raw}\": use 3 to 32 characters among a-z, 0-9 and hyphen (no accents, not starting or ending with a hyphen and no \"--\")"));
     }
     Ok(nm)
 }
@@ -131,10 +131,10 @@ fn name_info(n: &Node, raw: &str) -> Result<Value, String> {
     let live = view.name_entries(&name).into_iter()
         .filter_map(|(k, e)| parse_name_record(&e.lock).map(|r| (k, e.clone(), r)))
         .find(|(_, _, r)| daa <= r.expiry + p.name_grace);
-    let Some((key, e, r)) = live else { return Ok(json!({ "name": name, "status": "livre", "fee": s(fee), "daaScore": daa })) };
+    let Some((key, e, r)) = live else { return Ok(json!({ "name": name, "status": "free", "fee": s(fee), "daaScore": daa })) };
     let bps = p.bps as f64;
     Ok(json!({
-        "name": name, "status": if daa <= r.expiry { "ativo" } else { "em carência" }, "fee": s(fee), "daaScore": daa,
+        "name": name, "status": if daa <= r.expiry { "active" } else { "grace" }, "fee": s(fee), "daaScore": daa,
         "target": encode_address(p, &r.target), "targetType": parse_address_data(&r.target).map(|a| a.kind().to_string()),
         "targetData": hx(&r.target), "owner": encode_address(p, &r.owner), "ownerLock": hx(&r.owner),
         "expiry": r.expiry, "expiresIn": (r.expiry as f64 - daa as f64) / bps, "graceEndsIn": ((r.expiry + p.name_grace) as f64 - daa as f64) / bps,
@@ -175,7 +175,7 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
         }
         "getkeyimagebucket" => {
             let prefix = p_str(p, "prefix")?.to_string();
-            if prefix.len() != 2 || !prefix.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) { return Err("prefixo de imagem de chave inválido (use 1 byte, ex.: \"a7\")".into()); }
+            if prefix.len() != 2 || !prefix.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) { return Err("invalid key image prefix (use 1 byte, e.g. \"a7\")".into()); }
             let v = n.c.virtual_view();
             let mut spent: Vec<String> = v.base.ki.iter().map(|k| to_hex(k)).filter(|k| k.starts_with(&prefix)).collect();
             spent.extend(v.diff.add_ki.iter().map(|k| to_hex(k)).filter(|k| k.starts_with(&prefix)));
@@ -186,17 +186,17 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
         }
         "getheader" => {
             let hs = p_str(p, "hash")?;
-            let h = n.c.headers.get(&h32(hs)?).ok_or("bloco desconhecido")?;
+            let h = n.c.headers.get(&h32(hs)?).ok_or("unknown block")?;
             Ok(json!({ "hash": hs, "header": hx(&h.serialize(false)) }))
         }
         "gettxproof" => {
             let txid = h32(p_str(p, "txid")?)?;
             let depth = p_u64(p, "depth", 100).clamp(1, 5000) as usize;
             let Some(h) = n.c.tx_index.get(&txid).copied() else {
-                return Err(if n.c.tx_status(&txid)["status"] == "accepted" { "aceita há pouco: a prova fica pronta no próximo bloco".into() } else { "transação não aceita".into() });
+                return Err(if n.c.tx_status(&txid)["status"] == "accepted" { "accepted just now: the proof will be ready at the next block".into() } else { "transaction not accepted".into() });
             };
             let accepted = &n.c.acc[&h].accepted;
-            let idx = accepted.iter().position(|x| *x == txid).ok_or("transação não aceita")?;
+            let idx = accepted.iter().position(|x| *x == txid).ok_or("transaction not accepted")?;
             let merkle = merkle_proof(accepted, idx);
             let hscore = n.c.store.gd[&h].blue_score;
             let mut after: std::collections::VecDeque<Hash> = Default::default();
@@ -204,12 +204,12 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
             while let Some(b) = x {
                 if b == h { break; }
                 let g = &n.c.store.gd[&b];
-                if g.blue_score <= hscore { return Err("o bloco de aceitação saiu da cadeia selecionada (reorganização): tente de novo".into()); }
+                if g.blue_score <= hscore { return Err("the accepting block left the selected chain (reorganization): try again".into()); }
                 after.push_back(b);
                 if after.len() > depth { after.pop_front(); }
                 x = g.selected_parent;
             }
-            if x.is_none() { return Err("bloco de aceitação fora da cadeia".into()); }
+            if x.is_none() { return Err("accepting block outside the chain".into()); }
             let chain: Vec<Value> = after.iter().rev().map(|b| hx(&n.c.headers[b].serialize(false))).collect();
             Ok(json!({ "txid": to_hex(&txid), "block": to_hex(&h), "header": hx(&n.c.headers[&h].serialize(false)), "merkle": merkle, "chain": chain, "available": after.len() }))
         }
@@ -222,7 +222,7 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
             let mut out = vec![];
             for nm in names {
                 let Ok(info) = name_info(n, &nm) else { continue };
-                if info["status"] == "livre" { continue; }
+                if info["status"] == "free" { continue; }
                 if let Some(w) = &owners { if !w.contains(info["ownerLock"].as_str().unwrap_or("")) { continue; } }
                 out.push(info);
                 if out.len() >= limit { break; }
@@ -253,7 +253,7 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
             let max = n.params.max_block_mass - 20_000;
             let txs = n.mempool.select(max);
             let count = txs.len();
-            let block = n.c.build_template(addr.data(), txs, b"krevod", now_ms()).ok_or("não foi possível montar o modelo")?;
+            let block = n.c.build_template(addr.data(), txs, b"krevod", now_ms()).ok_or("could not build the template")?;
             let t = json!({ "block": hx(&block.serialize()), "prePowHash": hx(&block.header.pre_pow_hash()), "bits": block.header.bits, "longpollid": id, "txs": count });
             if n.template_cache.len() > 64 { n.template_cache.clear(); }
             n.template_cache.insert(key, t.clone());
@@ -269,13 +269,13 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
         "sendrawtransaction" => {
             let tx = Transaction::deserialize(&from_hex(p_str(p, "tx")?)?)?;
             let r = n.receive_tx(Arc::new(tx), None, true);
-            if r["ok"] != true { return Err(r["reason"].as_str().unwrap_or("transação recusada").to_string()); }
+            if r["ok"] != true { return Err(r["reason"].as_str().unwrap_or("transaction rejected").to_string()); }
             Ok(json!({ "txid": r["txid"], "phase": r["phase"] }))
         }
         "gettransaction" => {
             let txid = h32(p_str(p, "txid")?)?;
             let m = n.mempool.txs.get(&txid).map(|e| e.tx.clone()).or_else(|| n.stem.get(&txid).map(|e| e.0.clone()));
-            let raw = match &m { Some(t) => t.serialize(), None => n.c.find_tx(&txid).ok_or("transação desconhecida")?.serialize() };
+            let raw = match &m { Some(t) => t.serialize(), None => n.c.find_tx(&txid).ok_or("unknown transaction")?.serialize() };
             let st = n.c.tx_status(&txid);
             let status = if st["status"] == "unknown" && m.is_some() { json!("mempool") } else { st["status"].clone() };
             Ok(json!({
@@ -341,10 +341,10 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
             Ok(json!({ "anchor": lo, "branch": n.params.fcmp_branch, "total": base.s_list.len(), "daaScore": daa }))
         }
         "getfcmppath" => {
-            let anchor = p["anchor"].as_u64().ok_or("âncora inválida")?;
+            let anchor = p["anchor"].as_u64().ok_or("invalid anchor")?;
             let b = n.params.fcmp_branch as u64;
             let base = &n.c.utxo;
-            if anchor < 1 || anchor > base.s_list.len() as u64 { return Err("âncora inválida".into()); }
+            if anchor < 1 || anchor > base.s_list.len() as u64 { return Err("invalid anchor".into()); }
             let last = anchor.div_ceil(b) - 1;
             let mut paths = vec![];
             for k in p["chunks"].as_array().cloned().unwrap_or_default().iter().take(32).filter_map(|x| x.as_u64()) {
@@ -359,7 +359,7 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
         }
         "getblock" => {
             let h = h32(p_str(p, "hash")?)?;
-            let b = n.c.blocks.get(&h).cloned().ok_or("bloco desconhecido")?;
+            let b = n.c.blocks.get(&h).cloned().ok_or("unknown block")?;
             let col = colors(n);
             let mut r = block_summary(n, &h, &col);
             let gd = &n.c.store.gd[&h];
@@ -392,7 +392,7 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
         }
         "getaddresshistory" => {
             let a = decode_address(&n.params, p_str(p, "address")?)?;
-            if a.kind() == 's' { return Err("endereço privado: o saldo e o histórico são invisíveis por projeto".into()); }
+            if a.kind() == 's' { return Err("private address: the balance and history are invisible by design".into()); }
             let daa = n.c.virt().gd.daa_score;
             let utxos: Vec<Value> = n.c.utxos_by_lock(a.data()).into_iter().map(|(k, e)| json!({
                 "outpoint": format!("{}:{}", to_hex(&k.0), k.1), "amount": s(e.amount), "daa": e.daa, "coinbase": e.coinbase,
@@ -420,6 +420,6 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
         "getpeers" => Ok(Value::Array(n.peers.values().map(|p| json!({ "addr": p.listen.clone().unwrap_or(p.addr.clone()), "outbound": p.outbound, "ready": p.ready })).collect())),
         "addpeer" => { let a = p_str(p, "addr")?.to_string(); if !n.known.contains(&a) { n.known.push(a.clone()); } n.to_connect.push(a); Ok(json!(true)) }
         "estimatefee" => Ok(json!({ "feeRate": s(n.params.min_relay_fee_rate) })),
-        _ => Err(format!("método desconhecido: {method}")),
+        _ => Err(format!("unknown method: {method}")),
     }
 }

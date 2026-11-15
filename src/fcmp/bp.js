@@ -1,24 +1,24 @@
-// Bulletproofs para circuitos aritméticos (Bünz et al., seção 5) com COMPROMISSOS
-// VETORIAIS — a mesma ideia dos "Generalized Bulletproofs" usados nas árvores de curvas.
+// Bulletproofs for arithmetic circuits (Bünz et al., section 5) with VECTOR
+// COMMITMENTS — the same idea as the "Generalized Bulletproofs" used in curve trees.
 //
-// Relação provada (sem configuração confiável):
-//   aL ∘ aR = aO   e   W_L·aL + W_R·aR + W_O·aO + Σ_k W_Ck·c_k = c
-// onde cada c_k é o vetor aberto por um compromisso público C_k = <c_k, G> + γ_k·H.
-// Os nós (cegados) da árvore são exatamente esses compromissos: a prova "abre" o nó por
-// dentro, sem revelar o conteúdo.
+// Proven relation (no trusted setup):
+//   aL ∘ aR = aO   and   W_L·aL + W_R·aR + W_O·aO + Σ_k W_Ck·c_k = c
+// where each c_k is the vector opened by a public commitment C_k = <c_k, G> + γ_k·H.
+// The (blinded) tree nodes are exactly these commitments: the proof "opens" the node from
+// the inside, without revealing its content.
 //
-// Polinômios (potências de Laurent em X):
+// Polynomials (Laurent powers in X):
 //   l(X) = (aL + y^-n∘wR)·X + aO·X² + sL·X³ + Σ_k c_k·X^(4+k)
 //   r(X) = (wO − y^n) + (y^n∘aR + wL)·X + y^n∘sR·X³ + Σ_k wC_k·X^(−2−k)
-// O coeficiente de X² de <l, r> é wc + δ(y, z) exatamente quando as restrições valem;
-// cada c_k fica numa potência própria, então não se mistura com aL (nem entre si).
-// O argumento de produto interno usa a dobra G' = G_lo + u·G_hi com desafios de 128 bits.
+// The X² coefficient of <l, r> is wc + δ(y, z) exactly when the constraints hold;
+// each c_k sits at its own power, so it does not mix with aL (nor with each other).
+// The inner-product argument uses the fold G' = G_lo + u·G_hi with 128-bit challenges.
 
 import { H, H64 } from '../crypto/hash.js';
 import { randomBytes } from 'node:crypto';
 import { bytesToBigBE, u32le } from '../util/bytes.js';
 
-// ------------------------------------------------------------------ geradores
+// ------------------------------------------------------------------ generators
 const genCache = new Map();
 export function bpGens(curve, n) {
   let c = genCache.get(curve.name);
@@ -34,7 +34,7 @@ export function bpGens(curve, n) {
   return c;
 }
 
-/** Geradores já calculados (para entregar às threads de prova sem recalcular). */
+/** Precomputed generators (to hand to the proving threads without recomputing). */
 export function exportGens(curve) {
   const c = genCache.get(curve.name);
   if (!c) return null;
@@ -49,7 +49,7 @@ export function installGens(curve, data) {
   c.H = data.H.map(([x, y]) => curve.point(x, y));
 }
 
-// ------------------------------------------------------------------ transcrição
+// ------------------------------------------------------------------ transcript
 export class Transcript {
   constructor(label) { this.st = H('fcmp/transcript', label); }
   add(label, ...xs) { this.st = H('fcmp/transcript', this.st, label, ...xs); return this; }
@@ -67,13 +67,13 @@ export class Transcript {
   }
 }
 
-// ------------------------------------------------------------------ utilidades
+// ------------------------------------------------------------------ utilities
 const powers = (x, n, m) => { const r = new Array(n); let a = 1n; for (let i = 0; i < n; i++) { r[i] = a; a = (a * x) % m; } return r; };
 function inner(a, b, m) { let s = 0n; for (let i = 0; i < a.length; i++) if (a[i] && b[i]) s += a[i] * b[i]; return s % m; }
 const log2 = (n) => 31 - Math.clz32(n);
 export const nextPow2 = (x) => { let p = 1; while (p < x) p <<= 1; return p; };
 
-/** Potências de X presentes em l, r e t (dependem só do número de compromissos K). */
+/** Powers of X present in l, r and t (depend only on the number of commitments K). */
 export function tPowers(K) {
   const Lp = [1, 2, 3], Rp = [0, 1, 3];
   for (let k = 0; k < K; k++) { Lp.push(4 + k); Rp.push(-2 - k); }
@@ -84,21 +84,21 @@ export function tPowers(K) {
 
 function xpow(F, x, e) { return e >= 0 ? F.pow(x, BigInt(e)) : F.pow(F.inv(x), BigInt(-e)); }
 
-// ======================================================================== provar
+// ======================================================================== prove
 /**
- * cs: ConstraintSystem (modo prova) com cs.n (potência de 2) e os compromissos já declarados
- * (entries = Map posição → valor, gamma). tr: Transcript (já com o enunciado público).
+ * cs: ConstraintSystem (prove mode) with cs.n (a power of 2) and the commitments already declared
+ * (entries = Map position → value, gamma). tr: Transcript (already with the public statement).
  */
 export function bpProve(curve, cs, tr, { unsafeSkipChecks = false } = {}) {
   const F = curve.S, m = F.m, n = cs.n, K = cs.vcs.length;
-  if (cs.m !== m) throw new Error('bp: campo do circuito ≠ escalares da curva');
-  if (cs.nGates > n) throw new Error('bp: portas demais para n');
-  if (!unsafeSkipChecks) cs.check(); // (só testes desligam: simulam um provador desonesto)
+  if (cs.m !== m) throw new Error('bp: circuit field ≠ curve scalars');
+  if (cs.nGates > n) throw new Error('bp: too many gates for n');
+  if (!unsafeSkipChecks) cs.check(); // (only tests turn this off: they simulate a dishonest prover)
   const gens = bpGens(curve, n);
   const G = gens.G.slice(0, n), Hs = gens.H.slice(0, n);
   const pad = (a) => { const r = new Array(n).fill(0n); for (let i = 0; i < a.length; i++) r[i] = a[i] ?? 0n; return r; };
   const aL = pad(cs.aL), aR = pad(cs.aR), aO = pad(cs.aO);
-  // nonces "hedged": semente = H(testemunha ‖ acaso) — imprevisíveis mesmo com o gerador quebrado
+  // "hedged" nonces: seed = H(witness ‖ randomness) — unpredictable even with a broken generator
   const seed = H('fcmp/bp/seed', ...aL, ...aR, ...(cs.vcs ?? []).map((v) => v.gamma ?? 0n), randomBytes(32));
   const nonce = (tag, i = 0) => bytesToBigBE(H64('fcmp/bp/nonce', seed, tag, i)) % m;
   const alpha = nonce('alpha'), beta = nonce('beta'), rho = nonce('rho');
@@ -121,15 +121,15 @@ export function bpProve(curve, cs, tr, { unsafeSkipChecks = false } = {}) {
   rv.set(3, sR.map((s, i) => (yp[i] * s) % m));
   cs.vcs.forEach((vc, k) => {
     const c = new Array(n).fill(0n), w = new Array(n).fill(0n);
-    for (const [pos, v] of vc.entries) { if (pos >= n) throw new Error('bp: compromisso fora do tamanho'); c[pos] = v % m; }
-    for (const [pos, v] of wC[k]) { if (pos >= n) throw new Error('bp: restrição fora do tamanho'); w[pos] = v; }
+    for (const [pos, v] of vc.entries) { if (pos >= n) throw new Error('bp: commitment out of range'); c[pos] = v % m; }
+    for (const [pos, v] of wC[k]) { if (pos >= n) throw new Error('bp: constraint out of range'); w[pos] = v; }
     lv.set(4 + k, c); rv.set(-2 - k, w);
   });
   const t = new Map();
   for (const i of Lp) for (const j of Rp) t.set(i + j, ((t.get(i + j) ?? 0n) + inner(lv.get(i), rv.get(j), m)) % m);
   let delta = 0n;
   for (let i = 0; i < n; i++) if (wR[i] && wL[i]) delta += yi[i] * wR[i] % m * wL[i];
-  if (!unsafeSkipChecks && t.get(2) !== (wc + delta) % m) throw new Error('bp: t2 não confere (circuito inconsistente)');
+  if (!unsafeSkipChecks && t.get(2) !== (wc + delta) % m) throw new Error('bp: t2 does not match (inconsistent circuit)');
 
   const tau = new Map(), Ts = [];
   for (const e of Tpow) {
@@ -151,7 +151,7 @@ export function bpProve(curve, cs, tr, { unsafeSkipChecks = false } = {}) {
   const w = tr.ch('w', m);
   const Q = gens.u.mul(w).j;
 
-  // ---- argumento de produto interno; H'_i = y^-i·H_i guardado como peso cw_i
+  // ---- inner-product argument; H'_i = y^-i·H_i kept as the weight cw_i
   let a = l, b = r, Gv = G.map((p) => p.j), Hv = Hs.map((p) => p.j), cw = yi;
   const Ls = [], Rs = [];
   while (a.length > 1) {
@@ -181,8 +181,8 @@ export function bpProve(curve, cs, tr, { unsafeSkipChecks = false } = {}) {
   return { AI, AO, S, T: Ts, taux, mu, that, L: Ls, R: Rs, a: a[0], b: b[0] };
 }
 
-// ===================================================================== verificar
-/** Acumulador para verificar várias provas (na mesma curva) com UMA multiexponenciação. */
+// ===================================================================== verify
+/** Accumulator to verify several proofs (on the same curve) with ONE multi-exponentiation. */
 export class BpBatch {
   constructor(curve) { this.curve = curve; this.n = 0; this.G = []; this.H = []; this.g = 0n; this.h = 0n; this.u = 0n; this.extra = []; }
   _grow(n) { while (this.G.length < n) { this.G.push(0n); this.H.push(0n); } this.n = Math.max(this.n, n); }
@@ -195,15 +195,15 @@ export class BpBatch {
 }
 
 /**
- * Acrescenta ao lote as equações de uma prova. cs: o MESMO circuito montado em modo
- * verificação (com cs.n e os compromissos públicos). Lança erro se a prova for malformada.
+ * Adds a proof's equations to the batch. cs: the SAME circuit built in verify mode
+ * (with cs.n and the public commitments). Throws if the proof is malformed.
  */
 export function bpVerifyInto(batch, cs, proof, tr) {
   const curve = batch.curve, F = curve.S, m = F.m, n = cs.n, K = cs.vcs.length;
   const rounds = log2(n);
-  if (cs.m !== m || (1 << rounds) !== n) throw new Error('bp: parâmetros inválidos');
+  if (cs.m !== m || (1 << rounds) !== n) throw new Error('bp: invalid parameters');
   const { T: Tpow } = tPowers(K);
-  if (proof.T.length !== Tpow.length || proof.L.length !== rounds || proof.R.length !== rounds) throw new Error('bp: prova com tamanho errado');
+  if (proof.T.length !== Tpow.length || proof.L.length !== rounds || proof.R.length !== rounds) throw new Error('bp: proof with the wrong size');
   tr.add('AI', proof.AI).add('AO', proof.AO).add('S', proof.S);
   const y = tr.ch('y', m), z = tr.ch('z', m);
   Tpow.forEach((e, i) => tr.add('T', String(e), proof.T[i]));
@@ -225,7 +225,7 @@ export function bpVerifyInto(batch, cs, proof, tr) {
   batch.g = (batch.g + c1 * ((proof.that - X(2) * ((wc + delta) % m)) % m)) % m;
   batch.h = (batch.h + c1 * proof.taux) % m;
   Tpow.forEach((e, i) => batch.extra.push([(m - c1 * X(e) % m) % m, proof.T[i]]));
-  // (2)  produto interno
+  // (2)  inner product
   let Up = 1n;
   for (const u of us) Up = (Up * u) % m;
   const k2 = (c2 * Up) % m;
@@ -239,7 +239,7 @@ export function bpVerifyInto(batch, cs, proof, tr) {
     batch.extra.push([c2 * suffix % m * (us[k] * us[k] % m) % m, proof.L[k]], [c2 * suffix % m, proof.R[k]]);
     suffix = (suffix * us[k]) % m;
   }
-  // s_i (G) e s'_i (H): rodada k ↔ bit (rounds−1−k) do índice
+  // s_i (G) and s'_i (H): round k ↔ bit (rounds−1−k) of the index
   let s = [1n], sp = [1n];
   for (let k = rounds - 1; k >= 0; k--) {
     s = [...s, ...s.map((v) => (v * us[k]) % m)];
@@ -257,7 +257,7 @@ export function bpVerifyInto(batch, cs, proof, tr) {
   batch.g = ((batch.g % m) + m) % m; batch.h = ((batch.h % m) + m) % m; batch.u = ((batch.u % m) + m) % m;
 }
 
-// ================================================================ serialização
+// ================================================================ serialization
 export function bpProofSize(n, K) { return (3 + tPowers(K).T.length + 2 * log2(n)) * 33 + 5 * 32; }
 
 export function encodeBpProof(curve, p) {
@@ -270,7 +270,7 @@ export function encodeBpProof(curve, p) {
   ]);
 }
 export function decodeBpProof(curve, buf, n, K) {
-  if (buf.length !== bpProofSize(n, K)) throw new Error('bp: tamanho de prova inválido');
+  if (buf.length !== bpProofSize(n, K)) throw new Error('bp: invalid proof size');
   let o = 0;
   const pt = () => { const p = curve.fromBytes(buf.subarray(o, o + 33)); o += 33; return p; };
   const sc = () => { const v = curve.S.fromBytes(buf.subarray(o, o + 32)); o += 32; return v; };

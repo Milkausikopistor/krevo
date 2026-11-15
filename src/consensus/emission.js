@@ -1,13 +1,13 @@
-// Emissão: redução suave e previsível, sem autoridade.
+// Emission: smooth and predictable reduction, with no authority.
 //
-// recompensa por bloco no mês m (m = daaScore / blocos_por_mês):
+// reward per block in month m (m = daaScore / blocks_per_month):
 //   r(m) = r0 · 2^(−m/48)
-// Ou seja: cai um pouquinho todo mês (~1,43%) e chega à metade a cada 4 anos —
-// sem "choques" de halving. Tudo em inteiros: os 48 fatores 2^(−j/48) são raízes
-// inteiras exatas, idênticas em qualquer implementação.
+// That is: it falls a little every month (~1.43%) and halves every 4 years — no halving
+// "shocks". All in integers: the 48 factors 2^(−j/48) are exact integer roots, identical in
+// any implementation.
 //
-// O teto MAX_SUPPLY é imposto pelo consenso: o total cunhado é rastreado por bloco
-// da cadeia e a recompensa é cortada para nunca ultrapassá-lo.
+// The MAX_SUPPLY cap is enforced by consensus: the total minted is tracked per chain block
+// and the reward is cut so it never exceeds it.
 
 import { MAX_SUPPLY } from '../params.js';
 
@@ -46,18 +46,18 @@ export function subsidyForMonth(month, params) {
   return (r0 * factorTable(params.reductionsPerHalving)[Number(month % steps)]) >> (64n + halvings);
 }
 
-/** Subsídio programado de um bloco com o dado daaScore (antes do corte do teto). */
+/** Scheduled subsidy of a block with the given daaScore (before the cap cut). */
 export const scheduledSubsidy = (daaScore, params) =>
   subsidyForMonth(BigInt(daaScore) / blocksPerMonth(params), params);
 
-/** Subsídio efetivo dado o total já cunhado (aplica o teto absoluto). */
+/** Effective subsidy given the total already minted (applies the absolute cap). */
 export function cappedSubsidy(daaScore, minted, params) {
   const s = scheduledSubsidy(daaScore, params);
   const room = MAX_SUPPLY - minted;
   return s > room ? (room > 0n ? room : 0n) : s;
 }
 
-/** Tabela anual da emissão programada (para documentação e testes). */
+/** Yearly table of the scheduled emission (for documentation and tests). */
 export function emissionSchedule(params) {
   const bpm = blocksPerMonth(params);
   const rows = [];

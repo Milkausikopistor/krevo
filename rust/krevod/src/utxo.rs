@@ -1,6 +1,6 @@
-//! Estado UTXO (espelha src/consensus/utxo.js): moedas transparentes, saídas privadas
-//! (nunca removidas), imagens de chave e a árvore de curvas sobre as saídas privadas.
-//! O estado materializado fica num bloco da cadeia (a "base") e anda aplicando/revertendo diffs.
+//! UTXO state (mirrors src/consensus/utxo.js): transparent coins, private outputs
+//! (never removed), key images and the curve tree over the private outputs.
+//! The materialized state lives at a chain block (the "base") and moves by applying/reverting diffs.
 
 use crate::bytes::Writer;
 use crate::fcmp::{CurveTree, Root};
@@ -76,13 +76,13 @@ impl UtxoSet {
         for (k, _) in d.add_s.iter().rev() {
             self.s.remove(k);
             let last = self.s_list.pop();
-            assert_eq!(last.as_ref(), Some(k), "ordem de saídas privadas inconsistente");
+            assert_eq!(last.as_ref(), Some(k), "inconsistent private output order");
         }
         if !d.add_s.is_empty() { self.tree.borrow_mut().truncate(self.s_list.len() as u64); }
         for (k, e) in &d.add_t { self.t.remove(k); self.idx_del(k, e); }
         for (k, e) in &d.rem_t { self.t.insert(*k, e.clone()); self.idx_add(k, e); }
     }
-    /// Raiz da árvore com as n primeiras saídas privadas.
+    /// Root of the tree with the first n private outputs.
     pub fn tree_root(&self, n: u64) -> Root {
         let leaf = |i: u64| { let k = self.s_list[i as usize]; let e = &self.s[&k]; (op_key32(&k), e.p, e.c) };
         self.tree.borrow_mut().root(&leaf, n)
@@ -93,14 +93,14 @@ impl UtxoSet {
     }
 }
 
-/// Chave compacta (32 bytes) de um outpoint para a memória das folhas.
+/// Compact key (32 bytes) of an outpoint for the leaf memo.
 pub fn op_key32(k: &Op) -> [u8; 32] {
     let mut h = crate::hash::H::new("leafkey").b(&k.0).n(k.1 as u64).d32();
-    h[0] ^= 0; // (só um identificador local)
+    h[0] ^= 0; // (just a local identifier)
     h
 }
 
-/// Visão = base + diff (somente leitura) — usada para validar transações em sequência.
+/// View = base + diff (read only) — used to validate transactions in sequence.
 pub struct UtxoView<'a> { pub base: &'a UtxoSet, pub diff: &'a UtxoDiff }
 
 impl<'a> UtxoView<'a> {
@@ -114,7 +114,7 @@ impl<'a> UtxoView<'a> {
         self.base.s.get(k)
     }
     pub fn has_ki(&self, ki: &[u8; 33]) -> bool { self.diff.add_ki_set.contains(ki) || self.base.ki.contains(ki) }
-    /// Registros (não gastos) de um nome, inclusive vencidos.
+    /// (Unspent) records of a name, including expired ones.
     pub fn name_entries(&self, name: &str) -> Vec<(Op, &'a TEntry)> {
         let mut keys: Vec<Op> = self.base.by_name.get(name).cloned().unwrap_or_default();
         for k in self.diff.names.get(name).into_iter().flatten() { if !keys.contains(k) { keys.push(*k); } }

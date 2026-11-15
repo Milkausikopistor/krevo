@@ -1,34 +1,34 @@
-// Endereços furtivos (stealth) com subendereços.
+// Stealth addresses with subaddresses.
 //
-// Carteira: chave de visualização a, chave de gasto b, B = b·G.
-// Subendereço i (o endereço principal é o subendereço 0):
-//   m_i = 0 se i = 0, senão Hs("subaddr", a, i)
-//   D_i = B + m_i·G          C_i = a·D_i          endereço_i = (C_i, D_i)
-// Todos os endereços têm a MESMA forma: ninguém distingue principal de subendereço,
-// nem descobre que dois subendereços são da mesma carteira.
+// Wallet: view key a, spend key b, B = b·G.
+// Subaddress i (the main address is subaddress 0):
+//   m_i = 0 if i = 0, otherwise Hs("subaddr", a, i)
+//   D_i = B + m_i·G          C_i = a·D_i          address_i = (C_i, D_i)
+// Every address has the SAME form: nobody can tell the main address from a subaddress, nor
+// find out that two subaddresses belong to the same wallet.
 //
-// Remetente, para a saída de índice j paga ao endereço (C, D):
-//   r_j aleatório POR SAÍDA,  R_j = r_j·D   (publicado na própria saída)
-//   ss = r_j·C               (o destinatário calcula a·R_j = a·r_j·D = r_j·C)
+// Sender, for the output of index j paid to the address (C, D):
+//   r_j random PER OUTPUT,  R_j = r_j·D   (published in the output itself)
+//   ss = r_j·C               (the recipient computes a·R_j = a·r_j·D = r_j·C)
 //   k  = Hs(ss, j)
-//   P  = k·G + D             (chave de uso único)
-//   x  = Hs'(ss, j)          (cegamento do compromisso)
-//   C  = x·G + v·H, valor cifrado = v XOR H''(ss, j), etiqueta = H'''(ss, j)[0]
+//   P  = k·G + D             (one-time key)
+//   x  = Hs'(ss, j)          (commitment blinding)
+//   C  = x·G + v·H, encrypted amount = v XOR H''(ss, j), tag = H'''(ss, j)[0]
 //
-// Destinatário: ss = a·R_j, D' = P − k·G e procura D' numa tabela de subendereços
-// (UMA multiplicação por saída, não importa quantos subendereços existam).
-// Chave privada de uso único p = k + b + m_i; imagem de chave I = p·Hp(P).
-// Quem tem só (a, B) — a "chave de visualização" — vê entradas de todos os
-// subendereços, mas não pode gastar.
+// Recipient: ss = a·R_j, D' = P − k·G, and looks D' up in a table of subaddresses
+// (ONE multiplication per output, no matter how many subaddresses exist).
+// One-time private key p = k + b + m_i; key image I = p·Hp(P).
+// Whoever has only (a, B) — the "view key" — sees incoming payments to every subaddress,
+// but cannot spend.
 
 import { createCipheriv, createDecipheriv } from 'node:crypto';
 import { H } from './hash.js';
 import { mulG, hashToScalar, modN } from './secp256k1.js';
 
-/** Escalar do subendereço i (0 para o endereço principal). */
+/** Scalar of subaddress i (0 for the main address). */
 export const subaddressScalar = (a, i) => (i === 0 ? 0n : hashToScalar('stealth/subaddr', a, i));
 
-/** Pontos (C, D) do subendereço i. */
+/** Points (C, D) of subaddress i. */
 export function subaddressKeys(a, B, i) {
   const m = subaddressScalar(a, i);
   const D = m === 0n ? B : B.add(mulG(m));
@@ -55,8 +55,8 @@ export function decryptAmount(enc, ss, i) {
 }
 
 /**
- * Cria a saída privada de índice i para o endereço (A, B) = (C, D) com o segredo r
- * desta saída. coinbase=true usa cegamento zero (o valor da recompensa já é público).
+ * Creates the private output of index i for the address (A, B) = (C, D) with this output's
+ * secret r. coinbase=true uses zero blinding (the reward amount is already public).
  */
 export function makeShieldedOutput({ A, B }, r, i, v, coinbase = false) {
   const R = B.mul(r);
@@ -69,13 +69,13 @@ export function makeShieldedOutput({ A, B }, r, i, v, coinbase = false) {
 }
 
 /**
- * Tenta reconhecer uma saída privada.
- * keys = { a, B, b?, table?, sub? } (chaves cruas: servidor leve, chave de visualização, testes)
- *     ou { vault, B, table } — a carteira: a·R é calculado DENTRO do cofre (src/crypto/vault.js).
- * table: Map(D.hex → índice do subendereço); sem ela, só reconhece o endereço principal.
- * ss: segredo compartilhado já calculado (varredura em lote), opcional.
- * Retorna null se não for nossa; senão { v, x, k, ss, index, p? } (index = subendereço que
- * recebeu; p só com chaves cruas que incluem b — a carteira gasta com keys.spender(k, index)).
+ * Tries to recognize a private output.
+ * keys = { a, B, b?, table?, sub? } (raw keys: light server, view key, tests)
+ *     or { vault, B, table } — the wallet: a·R is computed INSIDE the vault (src/crypto/vault.js).
+ * table: Map(D.hex → subaddress index); without it, only the main address is recognized.
+ * ss: shared secret already computed (batch scanning), optional.
+ * Returns null if it is not ours; otherwise { v, x, k, ss, index, p? } (index = the subaddress
+ * that received; p only with raw keys that include b — the wallet spends with keys.spender(k, index)).
  */
 export function scanShieldedOutput(keys, R, i, out, ss = null) {
   ss ??= keys.vault ? keys.vault.shared(R) : sharedSecret(keys.a, R);
@@ -90,8 +90,8 @@ export function scanShieldedOutput(keys, R, i, out, ss = null) {
   const v = decryptAmount(out.encAmount, ss, i);
   let x = blindingFactor(ss, i);
   if (!commit(v, x).equals(out.C)) {
-    if (mulH(v).equals(out.C)) x = 0n; // saída de coinbase
-    else return null; // compromisso não confere: valor corrompido
+    if (mulH(v).equals(out.C)) x = 0n; // coinbase output
+    else return null; // commitment does not match: corrupted amount
   }
   const res = { v, x, k, ss, index };
   if (keys.b !== undefined) res.p = modN(k + keys.b + (keys.sub ? keys.sub(index) : subaddressScalar(keys.a, index)));
@@ -99,24 +99,24 @@ export function scanShieldedOutput(keys, R, i, out, ss = null) {
 }
 
 // ------------------------------------------------------------------ memos
-// Memo criptografado no campo `payload` da transação: AES-256-GCM com chave
-// derivada do segredo compartilhado da saída do destinatário. Só quem tem a
-// chave de visualização do destinatário (ou o remetente) consegue ler.
+// Memo encrypted in the transaction's `payload` field: AES-256-GCM with a key derived from the
+// shared secret of the recipient's output. Only someone with the recipient's view key (or the
+// sender) can read it.
 //
-// Tamanho FIXO (1 + 128 + 16 bytes): toda transação com saída privada leva um
-// bloco de memo — vazio quando o usuário não escreve nada —, então quem observa
-// a rede não descobre nem SE há uma mensagem, nem o tamanho dela.
+// FIXED size (1 + 128 + 16 bytes): every transaction with a private output carries a memo block
+// — empty when the user writes nothing —, so whoever watches the network learns neither
+// WHETHER there is a message nor its length.
 
 export const MEMO_VERSION = 0x01;
 export const MEMO_MAX_BYTES = 127;
 const MEMO_PLAIN = 128;
 export const MEMO_BLOCK_SIZE = 1 + MEMO_PLAIN + 16;
 const memoKey = (ss, j) => H('memo/key', ss, j);
-const ZERO_IV = Buffer.alloc(12); // a chave é única por (R, destinatário, j): nunca há reuso de nonce
+const ZERO_IV = Buffer.alloc(12); // the key is unique per (R, recipient, j): there is never nonce reuse
 
 export function encryptMemo(text, ss, j) {
   const msg = Buffer.from(text ?? '', 'utf8');
-  if (msg.length > MEMO_MAX_BYTES) throw new Error(`memo longo demais (${msg.length} bytes; máximo ${MEMO_MAX_BYTES})`);
+  if (msg.length > MEMO_MAX_BYTES) throw new Error(`memo too long (${msg.length} bytes; maximum ${MEMO_MAX_BYTES})`);
   const plain = Buffer.alloc(MEMO_PLAIN);
   plain[0] = msg.length;
   msg.copy(plain, 1);
@@ -125,7 +125,7 @@ export function encryptMemo(text, ss, j) {
   return Buffer.concat([Buffer.from([MEMO_VERSION]), ct, c.getAuthTag()]);
 }
 
-/** Retorna o texto (possivelmente vazio) ou null se o bloco não é para esta saída. */
+/** Returns the text (possibly empty) or null if the block is not for this output. */
 export function decryptMemo(payload, ss, j) {
   if (!payload || payload.length !== MEMO_BLOCK_SIZE || payload[0] !== MEMO_VERSION) return null;
   try {

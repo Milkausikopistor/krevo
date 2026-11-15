@@ -1,8 +1,8 @@
-// Pré-carregamento para GRAVAR as cadeias que a suíte de testes JavaScript constrói:
-//   KREVO_RECORD_DIR=pasta node --import ./rust/krevod/vectors/record.mjs --test test/
-// Cada instância de consenso (com os parâmetros padrão de uma rede) grava seus blocos
-// aceitos, na ordem de chegada, no mesmo formato do arquivo de blocos do nó.
-// Depois, vectors/compare.mjs reprocessa cada arquivo nos dois nós e compara o estado.
+// Preload to RECORD the chains that the JavaScript test suite builds:
+//   KREVO_RECORD_DIR=folder node --import ./rust/krevod/vectors/record.mjs --test "test/*.test.js"
+// Each consensus instance (with a network's default parameters) records its accepted
+// blocks, in arrival order, in the same format as the node's block file.
+// Then vectors/compare.mjs reprocesses each file on both nodes and compares the state.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';

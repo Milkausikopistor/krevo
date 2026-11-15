@@ -1,23 +1,23 @@
-// Motor de consenso do Krevo.
+// Krevo consensus engine.
 //
-// Fluxo de um bloco novo:
-//  1. cabeçalho: PoW, pais (antichain), GHOSTDAG, dificuldade, timestamp, profundidade de merge
-//  2. corpo: coinbase bem formada, transações válidas isoladamente, Merkle, massa
-//  3. estado UTXO: o bloco "aceita" as transações do seu mergeset, em ordem de consenso,
-//     sobre o estado do pai selecionado. Transações conflitantes de blocos paralelos
-//     não invalidam o bloco: a primeira na ordem vence, as outras são ignoradas.
-//     O compromisso UTXO (MuHash) e a coinbase do cabeçalho precisam conferir;
-//     senão o bloco fica "desqualificado da cadeia" (continua no DAG, sem estado).
-//  4. "virtual": o bloco hipotético que aponta para todas as pontas. O estado do
-//     virtual é o estado atual da rede — é contra ele que o mempool valida.
+// Flow of a new block:
+//  1. header: PoW, parents (antichain), GHOSTDAG, difficulty, timestamp, merge depth
+//  2. body: well-formed coinbase, transactions valid in isolation, Merkle, mass
+//  3. UTXO state: the block "accepts" the transactions of its mergeset, in consensus order,
+//     on top of the selected parent's state. Conflicting transactions from parallel blocks
+//     do not invalidate the block: the first in order wins, the others are ignored.
+//     The UTXO commitment (MuHash) and the header's coinbase must match;
+//     otherwise the block is "disqualified from the chain" (it stays in the DAG, without state).
+//  4. "virtual": the hypothetical block that points to all tips. The virtual's state is the
+//     current state of the network — the mempool validates against it.
 //
-// Recompensas (sem pré-mineração, sem autoridade):
-//  Cada bloco da cadeia paga, na sua coinbase, todos os blocos do seu mergeset:
-//   azul     → subsídio + 1/2 das suas taxas + liberação do Fundo, para o minerador dele
-//   vermelho → o mesmo valor vai para o minerador do bloco que o incorporou
-//  A outra metade das taxas entra no "Fundo de Segurança", que é liberado aos poucos
-//  (1/864.000 por bloco): isso suaviza a renda dos mineradores, reduz o incentivo a
-//  ataques por taxas e ajuda a segurança de longo prazo quando a emissão acabar.
+// Rewards (no premine, no authority):
+//  Each chain block pays, in its coinbase, every block of its mergeset:
+//   blue     → subsidy + 1/2 of its fees + the Fund's release, to its miner
+//   red      → the same amount goes to the miner of the block that merged it
+//  The other half of the fees enters the "Security Fund", which is released gradually
+//  (1/864,000 per block): this smooths miners' income, reduces the incentive for fee-driven
+//  attacks and helps long-term security once emission ends.
 
 import { EventEmitter } from 'node:events';
 import { Block, Header, merkleRoot } from './block.js';
@@ -68,18 +68,18 @@ export class Consensus extends EventEmitter {
     this.ghostdag = new Ghostdag(this.store, params.ghostdagK);
     this.headers = new Map();
     this.blocks = new Map();
-    this.minerData = new Map();     // hash → dados de endereço do minerador
+    this.minerData = new Map();     // hash → miner address data
     this.minerParsed = new Map();
-    this.status = new Map();        // 'chain' (estado válido) | 'disq' (desqualificado)
-    this.acc = new Map();           // dados de aceitação dos blocos com estado válido
+    this.status = new Map();        // 'chain' (valid state) | 'disq' (disqualified)
+    this.acc = new Map();           // acceptance data of the blocks with a valid state
     this.invalid = new Map();       // hash → motivo
     this.tips = new Set();
     this.utxo = new UtxoSet(params.fcmpBranch);
-    this.txIndex = new Map();       // txid → bloco da cadeia que a aceitou (cadeia da base)
-    this.txBlock = new Map();       // txid → primeiro bloco que contém a transação (índice local, não é consenso)
-    this.lockTxs = new Map();       // trava transparente → txids que a tocam (índice local, para exploradores)
-    this.rewardIndex = new Map();   // bloco → { amount, paidBy, red } recompensa efetivamente paga (índice local, para pools)
-    this.order = [];                // hashes na ordem de chegada (índice local)
+    this.txIndex = new Map();       // txid → chain block that accepted it (base chain)
+    this.txBlock = new Map();       // txid → first block that contains the transaction (local index, not consensus)
+    this.lockTxs = new Map();       // transparent lock → txids that touch it (local index, for explorers)
+    this.rewardIndex = new Map();   // block → { amount, paidBy, red } reward actually paid (local index, for pools)
+    this.order = [];                // hashes in arrival order (local index)
     this.powLimitBits = params.genesis.bits;
     this.virtual = null;
     this.virtualVersion = 0;
@@ -105,9 +105,9 @@ export class Consensus extends EventEmitter {
   has(hash) { return this.store.has(hash); }
   gd(hash) { return this.store.gd.get(hash); }
 
-  // ------------------------------------------------------------ entrada
+  // ------------------------------------------------------------ input
   /**
-   * Processa um bloco. Retorna { status: 'accepted'|'known'|'orphan'|'future'|'invalid', ... }.
+   * Processes a block. Returns { status: 'accepted'|'known'|'orphan'|'future'|'invalid', ... }.
    */
   addBlock(block, { now = Date.now(), trusted = false } = {}) {
     const hash = block.hashHex;
@@ -156,52 +156,52 @@ export class Consensus extends EventEmitter {
 
   _validateHeader(block, parents) {
     const p = this.params, h = block.header;
-    if (h.version !== 1) fail('versão de cabeçalho desconhecida');
-    if (parents.length < 1 || parents.length > p.maxParents) fail('número de pais inválido');
-    for (let i = 1; i < parents.length; i++) if (!(parents[i - 1] < parents[i])) fail('pais fora de ordem ou repetidos');
-    if (compactToTarget(h.bits) > compactToTarget(this.powLimitBits)) fail('alvo acima do limite');
-    if (!checkPow(h)) fail('prova de trabalho insuficiente');
+    if (h.version !== 1) fail('unknown header version');
+    if (parents.length < 1 || parents.length > p.maxParents) fail('invalid number of parents');
+    for (let i = 1; i < parents.length; i++) if (!(parents[i - 1] < parents[i])) fail('parents out of order or repeated');
+    if (compactToTarget(h.bits) > compactToTarget(this.powLimitBits)) fail('target above the limit');
+    if (!checkPow(h)) fail('insufficient proof of work');
     for (let i = 0; i < parents.length; i++) {
       for (let j = 0; j < parents.length; j++) {
-        if (i !== j && this.store.isAncestor(parents[i], parents[j])) fail('pais não formam uma antichain');
+        if (i !== j && this.store.isAncestor(parents[i], parents[j])) fail('parents do not form an antichain');
       }
     }
     const gd = this.ghostdag.run(parents);
-    if (gd.mergesetBlues.length + gd.mergesetReds.length > p.mergesetSizeLimit) fail('mergeset grande demais');
-    if (h.blueScore !== gd.blueScore || h.blueWork !== gd.blueWork || h.daaScore !== gd.daaScore) fail('dados GHOSTDAG do cabeçalho não conferem');
-    if (h.bits !== requiredBits(p, this.store, this.headers, gd, this.powLimitBits)) fail('dificuldade incorreta');
-    if (h.timestamp < pastMedianTime(p, this.store, this.headers, gd)) fail('timestamp anterior ao tempo mediano passado');
+    if (gd.mergesetBlues.length + gd.mergesetReds.length > p.mergesetSizeLimit) fail('mergeset too large');
+    if (h.blueScore !== gd.blueScore || h.blueWork !== gd.blueWork || h.daaScore !== gd.daaScore) fail('header GHOSTDAG data does not match');
+    if (h.bits !== requiredBits(p, this.store, this.headers, gd, this.powLimitBits)) fail('incorrect difficulty');
+    if (h.timestamp < pastMedianTime(p, this.store, this.headers, gd)) fail('timestamp before the past median time');
     for (const x of gd.mergesetAsc) {
-      if (gd.blueScore - this.store.gd.get(x).blueScore > p.mergeDepth) fail('bloco antigo demais no mergeset (limite de merge)');
+      if (gd.blueScore - this.store.gd.get(x).blueScore > p.mergeDepth) fail('block too old in the mergeset (merge depth limit)');
     }
     return gd;
   }
 
   _validateBody(block) {
     const p = this.params, txs = block.txs;
-    if (txs.length < 1) fail('bloco sem coinbase');
+    if (txs.length < 1) fail('block without coinbase');
     const cb = txs[0];
-    if (!cb.isCoinbase() || cb.version !== 1) fail('primeira transação não é coinbase');
-    if (cb.fee !== 0n || cb.mass !== 0 || cb.rangeProof.length || cb.bindingSig) fail('coinbase malformada');
-    if (cb.payload.length > p.maxCoinbasePayload) fail('payload da coinbase grande demais');
+    if (!cb.isCoinbase() || cb.version !== 1) fail('first transaction is not a coinbase');
+    if (cb.fee !== 0n || cb.mass !== 0 || cb.rangeProof.length || cb.bindingSig) fail('malformed coinbase');
+    if (cb.payload.length > p.maxCoinbasePayload) fail('coinbase payload too large');
     let pl;
-    try { pl = parseCoinbasePayload(cb.payload); } catch { fail('payload da coinbase inválido'); }
-    if (pl.blueScore !== block.header.blueScore) fail('blue score da coinbase não confere');
+    try { pl = parseCoinbasePayload(cb.payload); } catch { fail('invalid coinbase payload'); }
+    if (pl.blueScore !== block.header.blueScore) fail('coinbase blue score does not match');
     let md;
-    try { md = parseAddressData(pl.minerData); } catch { fail('endereço do minerador inválido'); }
-    if (!['t', 's', 'm', 'q'].includes(md.type)) fail('endereço do minerador inválido (precisa ser krv, krs, krq ou multiassinatura)');
+    try { md = parseAddressData(pl.minerData); } catch { fail('invalid miner address'); }
+    if (!['t', 's', 'm', 'q'].includes(md.type)) fail('invalid miner address (must be krv, krs, krq or multisig)');
     let mass = 0;
     const ids = new Set([cb.idHex]);
     for (let i = 1; i < txs.length; i++) {
       const tx = txs[i];
-      if (tx.isCoinbase()) fail('coinbase extra');
+      if (tx.isCoinbase()) fail('extra coinbase');
       validateTxStateless(tx, p);
-      if (ids.has(tx.idHex)) fail('transação repetida no bloco');
+      if (ids.has(tx.idHex)) fail('transaction repeated in the block');
       ids.add(tx.idHex);
       mass += tx.mass;
     }
-    if (mass > p.maxBlockMass) fail('massa do bloco acima do limite');
-    if (!merkleRoot(txs.map((t) => t.hash)).equals(block.header.hashMerkleRoot)) fail('raiz de Merkle incorreta');
+    if (mass > p.maxBlockMass) fail('block mass above the limit');
+    if (!merkleRoot(txs.map((t) => t.hash)).equals(block.header.hashMerkleRoot)) fail('incorrect Merkle root');
     return pl.minerData;
   }
 
@@ -218,19 +218,19 @@ export class Consensus extends EventEmitter {
     const parentsKey = this.store.parents.get(hash).join();
     let res;
     if (this.virtual && this.virtual.parents.map(toHex).join() === parentsKey) {
-      res = this.virtual.acceptance; // mesmos pais do virtual atual → mesma aceitação
+      res = this.virtual.acceptance; // same parents as the current virtual → same acceptance
     } else {
       this._moveBase(gd.selectedParent);
       res = this._computeAcceptance(gd);
     }
     let reason = null, cbShielded = 0n;
-    if (!h.utxoCommitment.equals(res.muhash.digest())) reason = 'compromisso UTXO incorreto';
-    else if (!h.acceptedIdMerkleRoot.equals(res.acceptedRoot)) reason = 'raiz de transações aceitas incorreta';
+    if (!h.utxoCommitment.equals(res.muhash.digest())) reason = 'incorrect UTXO commitment';
+    else if (!h.acceptedIdMerkleRoot.equals(res.acceptedRoot)) reason = 'incorrect accepted-transactions root';
     else {
       const actual = block.txs[0];
       const extra = parseCoinbasePayload(actual.payload).extra;
       const expected = this._buildCoinbase(res, gd, this.store.parents.get(hash), this.minerData.get(hash), extra);
-      if (!expected.serializeBody().equals(actual.serializeBody())) reason = 'coinbase não confere com as recompensas devidas';
+      if (!expected.serializeBody().equals(actual.serializeBody())) reason = 'coinbase does not match the rewards due';
       cbShielded = expected.shieldedTotal;
     }
     if (reason) {
@@ -246,7 +246,7 @@ export class Consensus extends EventEmitter {
     return true;
   }
 
-  /** Move o estado materializado para o bloco `target` revertendo/aplicando diffs. */
+  /** Moves the materialized state to block `target` by reverting/applying diffs. */
   _moveBase(target) {
     if (this.baseHash === target) return;
     let a = this.baseHash, b = target;
@@ -264,11 +264,11 @@ export class Consensus extends EventEmitter {
     }
     for (const h of apply.reverse()) {
       const acc = this.acc.get(h);
-      if (!acc) throw new Error('bloco da cadeia sem estado: ' + h);
+      if (!acc) throw new Error('chain block without state: ' + h);
       this.utxo.apply(acc.diff);
       for (const id of acc.accepted) this.txIndex.set(id, h);
       for (const r of acc.rewards ?? []) this.rewardIndex.set(r.hash, { amount: r.amount, paidBy: h, red: false });
-      for (const r of acc.reds ?? []) this.rewardIndex.set(r, { amount: 0n, paidBy: h, red: true }); // a recompensa de bloco vermelho vai para quem o fundiu
+      for (const r of acc.reds ?? []) this.rewardIndex.set(r, { amount: 0n, paidBy: h, red: true }); // a red block's reward goes to whoever merged it
     }
     this.baseHash = target;
   }
@@ -299,26 +299,26 @@ export class Consensus extends EventEmitter {
     });
   }
 
-  /** Aceitação de um bloco (ou do virtual) com estes dados GHOSTDAG. Pré-condição: base = pai selecionado. */
+  /** Acceptance of a block (or of the virtual) with this GHOSTDAG data. Precondition: base = selected parent. */
   _computeAcceptance(gd) {
     const p = this.params;
     const sp = gd.selectedParent;
-    if (this.baseHash !== sp) throw new Error('base fora de posição');
+    if (this.baseHash !== sp) throw new Error('base out of position');
     const spAcc = this.acc.get(sp);
     const view = new UtxoView(this.utxo);
     const mh = spAcc.muhash.clone();
     const daa = gd.daaScore;
     const spCb = this.blocks.get(sp).txs[0];
     this._applyTx(view, mh, spCb, daa, true);
-    // Catraca do pool privado (ZIP-209 do Zcash): saldo total dentro do pool privado,
-    // contado pelos valores PÚBLICOS que cruzam a fronteira (blindar, desblindar e
-    // recompensas pagas em endereço privado). Nunca pode ficar negativo: moedas
-    // privadas forjadas (bug ou computador quântico) não conseguem sair do pool.
+    // Private-pool turnstile (Zcash's ZIP-209): total balance inside the private pool, counted
+    // through the PUBLIC values that cross the border (shielding, unshielding and rewards paid
+    // to private addresses). It can never go negative: forged private coins (a bug or a
+    // quantum computer) cannot leave the pool.
     let shielded = (spAcc.shielded ?? 0n) + (spAcc.cbShielded ?? 0n);
     const accepted = [spCb.idHex];
     const seen = new Set(accepted);
     const fees = new Map();
-    let nameFees = 0n; // taxas de nomes (@nome): vão inteiras para o Fundo de Segurança
+    let nameFees = 0n; // name fees (@name): they all go to the Security Fund
     const order = [sp, ...gd.mergesetAsc];
     for (const x of order) {
       let f = 0n;
@@ -330,7 +330,7 @@ export class Consensus extends EventEmitter {
         try { r = validateTxInContext(tx, view, daa, p); }
         catch (e) { if (e instanceof TxRuleError) continue; throw e; }
         const delta = shieldedDelta(tx, r.tIn);
-        if (shielded + delta < 0n) continue; // violaria a catraca: transação ignorada
+        if (shielded + delta < 0n) continue; // would break the turnstile: transaction ignored
         shielded += delta;
         this._applyTx(view, mh, tx, daa, false);
         seen.add(id); accepted.push(id);
@@ -345,7 +345,7 @@ export class Consensus extends EventEmitter {
     const blueRewards = [];
     let redReward = 0n;
     for (const x of order) {
-      if (x === this.genesisHash) continue; // o gênesis não tem recompensa: zero pré-mineração
+      if (x === this.genesisHash) continue; // the genesis has no reward: zero premine
       const sub = cappedSubsidy(this.store.gd.get(x).daaScore, minted, p);
       minted += sub;
       const fee = fees.get(x);
@@ -371,11 +371,11 @@ export class Consensus extends EventEmitter {
     let shieldedTotal = 0n;
     for (const { addr, amount } of recipients) {
       if (amount === 0n) continue;
-      if (addr.type !== 's') tOut.push({ amount, lock: addr.data }); // transparente, multiassinatura ou quântico
+      if (addr.type !== 's') tOut.push({ amount, lock: addr.data }); // transparent, multisig or quantum-safe
       else {
         shieldedTotal += amount;
-        // r público e determinístico (por saída): todos validam a mesma saída; o
-        // minerador ainda recebe numa chave de uso único que só ele consegue gastar.
+        // public, deterministic r (per output): everyone validates the same output; the
+        // miner still receives on a one-time key that only they can spend.
         const j = sOut.length;
         const r = hashToScalar('coinbase/r', ...parents.map(fromHex), gd.blueScore, j);
         const o = makeShieldedOutput({ A: addr.A, B: addr.B }, r, j, amount, true);
@@ -383,7 +383,7 @@ export class Consensus extends EventEmitter {
       }
     }
     const cb = new Transaction({ tOut, sOut, payload: coinbasePayload(gd.blueScore, minerData, extra) });
-    cb.shieldedTotal = shieldedTotal; // valor (público) que esta coinbase coloca no pool privado
+    cb.shieldedTotal = shieldedTotal; // (public) amount this coinbase puts into the private pool
     return cb;
   }
 
@@ -415,7 +415,7 @@ export class Consensus extends EventEmitter {
       if ((size <= p.mergesetSizeLimit && !tooDeep) || vparents.length === 1) break;
       vparents.pop();
     }
-    if (gd.selectedParent !== selected) throw new Error('virtual: pai selecionado inconsistente');
+    if (gd.selectedParent !== selected) throw new Error('virtual: inconsistent selected parent');
     this._moveBase(selected);
     const acceptance = this._computeAcceptance(gd);
     const old = this.virtual;
@@ -428,7 +428,7 @@ export class Consensus extends EventEmitter {
     this.emit('virtual', { old, virtual: this.virtual });
   }
 
-  /** Modelo de bloco para mineração (o "virtual" com transações escolhidas). */
+  /** Block template for mining (the "virtual" with chosen transactions). */
   buildTemplate(minerData, txs = [], extra = Buffer.alloc(0), now = Date.now()) {
     parseAddressData(minerData);
     const v = this.virtual;
@@ -443,7 +443,7 @@ export class Consensus extends EventEmitter {
     return new Block(header, all);
   }
 
-  /** Modelo sobre pais arbitrários (testes/simulação de ramos concorrentes). */
+  /** Template on arbitrary parents (tests/simulation of competing branches). */
   buildTemplateOn(parentHashes, minerData, txs = [], extra = Buffer.alloc(0), now = Date.now()) {
     const parents = [...parentHashes].sort();
     const gd = this.ghostdag.run(parents);
@@ -462,8 +462,8 @@ export class Consensus extends EventEmitter {
     return new Block(header, all);
   }
 
-  // ----------------------------------------------------------- consultas
-  /** Situação de uma transação do ponto de vista do virtual. */
+  // ----------------------------------------------------------- queries
+  /** State of a transaction from the virtual's point of view. */
   txStatus(txidHex) {
     const v = this.virtual;
     if (v.acceptance.acceptedSet.has(txidHex)) {
@@ -477,8 +477,8 @@ export class Consensus extends EventEmitter {
     return { status: 'unknown' };
   }
 
-  /** Procura uma transação (não coinbase) em qualquer bloco conhecido. */
-  /** Índice local de histórico por endereço transparente (saídas criadas e gastas). */
+  /** Looks up a transaction (not a coinbase) in any known block. */
+  /** Local history index per transparent address (outputs created and spent). */
   _indexLocks(tx, id) {
     const add = (lockHex) => {
       let a = this.lockTxs.get(lockHex);
@@ -511,11 +511,11 @@ export class Consensus extends EventEmitter {
 
   supplyInfo() {
     const a = this.virtual.acceptance;
-    // shieldedSupply: KRV dentro do pool privado (catraca) — público e auditável por qualquer um
+    // shieldedSupply: KRV inside the private pool (turnstile) — public and auditable by anyone
     return { minted: a.minted, feePool: a.pool, shieldedSupply: a.shielded ?? 0n };
   }
 
-  /** Cadeia selecionada do virtual (mais recente primeiro). */
+  /** Selected chain of the virtual (most recent first). */
   selectedChain(limit = 100) {
     const out = [];
     let h = this.virtual.gd.selectedParent;

@@ -24,8 +24,8 @@ codegen-units = 4
 debug = false
 
 [profile.dev]
-# otimizado: nesta máquina o Controle de Aplicativo do Windows bloqueia os auxiliares de
-# compilação do perfil release; os do perfil dev rodam. Em outras máquinas use --release.
+# optimized: on some Windows machines Smart App Control blocks the release profile's build
+# helpers while the dev profile's ones run. Elsewhere, just use --release.
 opt-level = 3
 
 [profile.test]

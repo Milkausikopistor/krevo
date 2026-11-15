@@ -1,6 +1,6 @@
-// "node:fs" para o navegador: a carteira web guarda os dados cifrados no armazenamento do
-// navegador (src/web/browser-wallet.js), nunca em arquivos.
-const nope = () => { throw new Error('arquivos não existem no navegador'); };
+// "node:fs" for the browser: the web wallet keeps its data encrypted in the browser's storage
+// (src/web/browser-wallet.js), never in files.
+const nope = () => { throw new Error('there are no files in the browser'); };
 export const existsSync = () => false;
 export const readFileSync = nope;
 export const writeFileSync = nope;

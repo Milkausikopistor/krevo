@@ -1,7 +1,7 @@
-// Carteira leve com DOIS servidores: um honesto e um mentiroso que (a) esconde um pagamento
-// privado (remove a saída e desloca os índices), (b) esconde uma moeda transparente e
-// (c) mostra como disponível uma moeda que já foi gasta. Sozinho, o mentiroso engana a
-// carteira; com o servidor honesto ao lado, a carteira acerta o saldo e aponta as divergências.
+// Light wallet with TWO servers: an honest one and a liar that (a) hides a private
+// payment (removes the output and shifts the indices), (b) hides a transparent coin and
+// (c) shows as available a coin that was already spent. Alone, the liar fools the
+// wallet; with the honest server alongside, the wallet gets the balance right and points out the discrepancies.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -32,7 +32,7 @@ async function mineVia(url, address, n) {
   }
 }
 
-/** Servidor mentiroso na frente de um honesto. */
+/** Lying server in front of an honest one. */
 function liarProxy(upstream, plan) {
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
@@ -40,10 +40,10 @@ function liarProxy(upstream, plan) {
     for await (const c of req) body += c;
     const send = (code, type, data) => { res.writeHead(code, { 'content-type': type, 'access-control-allow-origin': '*' }); res.end(data); };
     const fwd = (p, opts = {}) => fetch(upstream + p, opts);
-    const K = plan.hideIndex; // saída privada escondida (índice global real)
+    const K = plan.hideIndex; // hidden private output (real global index)
     if (u.pathname === '/v1/info') { const i = await (await fwd('/v1/info')).json(); i.outputs -= K === null ? 0 : 1; return send(200, 'application/json', JSON.stringify(i)); }
     if (u.pathname === '/v1/compact' && K !== null) {
-      // monta a lista "mentirosa" (sem a saída K, índices deslocados) e devolve o pedaço pedido
+      // builds the "lying" list (without output K, indices shifted) and returns the requested chunk
       const info = await (await fwd('/v1/info')).json();
       const all = Buffer.from(await (await fwd(`/v1/compact?start=0&count=${info.outputs}`)).arrayBuffer());
       const entries = [];
@@ -72,7 +72,7 @@ function liarProxy(upstream, plan) {
   return new Promise((ok) => server.listen(0, '127.0.0.1', () => ok({ url: `http://127.0.0.1:${server.address().port}`, close: () => { server.closeAllConnections?.(); server.close(); } })));
 }
 
-test('dois servidores: o honesto desmascara o que o mentiroso esconde ou inventa', async () => {
+test('two servers: the honest one exposes what the liar hides or makes up', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-2srv-'));
   const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
@@ -84,64 +84,64 @@ test('dois servidores: o honesto desmascara o que o mentiroso esconde ou inventa
   const liar = await liarProxy(a.url, plan);
   try {
     const alice = Wallet.create(path.join(dir, 'alice.json'), params, url);
-    const truth = LightWallet.create(path.join(dir, 'bob.json'), params, b.url); // Bob com um servidor honesto
+    const truth = LightWallet.create(path.join(dir, 'bob.json'), params, b.url); // Bob with an honest server
     const miner = Keys.random();
     const mine = (n) => mineVia(url, miner.tAddress(params), n);
     await mineVia(url, alice.tAddress, 30);
     await mineVia(url, miner.sAddress(params), 40);
 
-    // Bob recebe T1 e GASTA (para o mentiroso depois "ressuscitar" essa moeda)
-    await alice.send({ to: truth.tAddress, amount: 2n * COIN, from: 'transparente' });
+    // Bob receives T1 and SPENDS it (so the liar can later "resurrect" that coin)
+    await alice.send({ to: truth.tAddress, amount: 2n * COIN, from: 'transparent' });
     await mine(params.lightProofDepth + 3);
     await truth.sync();
     const t1 = { ...truth.tUtxos[0] };
-    await truth.send({ to: alice.tAddress, amount: COIN / 2n, from: 'transparente' });
+    await truth.send({ to: alice.tAddress, amount: COIN / 2n, from: 'transparent' });
     await mine(1);
-    // Alice paga Bob: privado P (escondido pelo mentiroso) e transparente T2 (idem)
-    const pay = await alice.send({ to: truth.sAddress, amount: 3n * COIN, from: 'transparente', memo: 'escondido?' });
+    // Alice pays Bob: private P (hidden by the liar) and transparent T2 (same)
+    const pay = await alice.send({ to: truth.sAddress, amount: 3n * COIN, from: 'transparent', memo: 'hidden?' });
     await mine(1);
-    await alice.send({ to: miner.sAddress(params), amount: COIN, from: 'transparente' }); // outra saída privada DEPOIS de P: P fica no meio
+    await alice.send({ to: miner.sAddress(params), amount: COIN, from: 'transparent' }); // another private output AFTER P: P sits in the middle
     await mine(1);
-    const t2 = await alice.send({ to: truth.tAddress, amount: COIN, from: 'transparente' });
-    await mine(params.lightProofDepth + 60); // longe o bastante para não parecer "atraso"
+    const t2 = await alice.send({ to: truth.tAddress, amount: COIN, from: 'transparent' });
+    await mine(params.lightProofDepth + 60); // far enough not to look like "lag"
     const outs = await rpc(url, 'getshieldedoutputs', { start: 0, count: 5000 });
     plan.hideIndex = outs.outputs.find((o) => o.outpoint.startsWith(pay.txid)).index;
     plan.hideOutpoint = `${t2.txid}:0`;
     plan.phantom = { outpoint: t1.outpoint, amount: t1.amount, lock: t1.lock, daa: t1.daa, coinbase: false, mature: true, inMempool: false };
-    assert.ok((await rpc(url, 'getutxos', { locks: [t1.lock] })).utxos.every((u) => u.outpoint !== t1.outpoint), 'T1 está mesmo gasta');
+    assert.ok((await rpc(url, 'getutxos', { locks: [t1.lock] })).utxos.every((u) => u.outpoint !== t1.outpoint), 'T1 is really spent');
 
     await truth.sync();
     const real = truth.balance();
     assert.equal(real.shielded, 3n * COIN);
 
-    // 1) só o mentiroso: a carteira é enganada (sem o pagamento privado, sem T2, com a moeda gasta)
+    // 1) the liar alone: the wallet is fooled (no private payment, no T2, with the spent coin)
     const fooled = LightWallet.restore(path.join(dir, 'bob-1.json'), params, liar.url, { mnemonic: truth.mnemonic });
     await fooled.sync();
     const f = fooled.balance();
-    assert.equal(f.shielded, 0n, 'pagamento privado escondido');
-    assert.notEqual(f.transparent, real.transparent, 'saldo transparente errado');
+    assert.equal(f.shielded, 0n, 'private payment hidden');
+    assert.notEqual(f.transparent, real.transparent, 'wrong transparent balance');
 
-    // 2) mentiroso + honesto: saldo certo e divergências apontadas
+    // 2) liar + honest: right balance and discrepancies pointed out
     const both = LightWallet.restore(path.join(dir, 'bob-2.json'), params, `${liar.url},${b.url}`, { mnemonic: truth.mnemonic });
     const st = await both.sync();
     const g = both.balance();
     assert.equal(st.servers, 2);
-    assert.equal(g.shielded, real.shielded, 'o pagamento privado foi encontrado pelo honesto');
-    assert.equal(g.transparent, real.transparent, 'transparente certo: T2 conta, a moeda gasta não');
-    assert.deepEqual(both.history().received.map((r) => r.memo).filter(Boolean), ['escondido?']);
+    assert.equal(g.shielded, real.shielded, 'the private payment was found by the honest one');
+    assert.equal(g.transparent, real.transparent, 'transparent right: T2 counts, the spent coin does not');
+    assert.deepEqual(both.history().received.map((r) => r.memo).filter(Boolean), ['hidden?']);
     const d = both.discrepancies.join(' | ');
-    assert.match(d, /saídas privadas DIFERENTES/);
-    assert.match(d, /escondeu uma moeda transparente/);
-    assert.match(d, /já foi gasta \(a carteira tem a PROVA do gasto\)/);
-    assert.match(d, new RegExp(`a partir da posição ${plan.hideIndex}\\b`), 'aponta exatamente onde começou a divergência');
+    assert.match(d, /DIFFERENT private outputs/);
+    assert.match(d, /hid a transparent coin/);
+    assert.match(d, /already spent \(the wallet has the PROOF of the spend\)/);
+    assert.match(d, new RegExp(`from position ${plan.hideIndex}\\b`), 'points out exactly where the discrepancy started');
 
-    // 3) dois honestos: concordam
+    // 3) two honest ones: they agree
     const calm = LightWallet.restore(path.join(dir, 'bob-3.json'), params, `${a.url},${b.url}`, { mnemonic: truth.mnemonic });
     await calm.sync();
     assert.deepEqual(calm.discrepancies, []);
     assert.equal(calm.balance().shielded, real.shielded);
     assert.equal(calm.balance().transparent, real.transparent);
-    console.log(`    divergências detectadas: ${both.discrepancies.length} — ${d.slice(0, 160)}…`);
+    console.log(`    discrepancies detected: ${both.discrepancies.length} — ${d.slice(0, 160)}…`);
   } finally {
     liar.close();
     await a.close();

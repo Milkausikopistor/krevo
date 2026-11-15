@@ -1,20 +1,20 @@
-// Script do Bitcoin: codificação de dados/números e o contrato HTLC da troca atômica.
+// Bitcoin Script: data/number encoding and the atomic swap's HTLC contract.
 //
-// HTLC ("contrato com trava de hash e de tempo"), o mesmo formato usado por trocas atômicas
-// desde 2017 (BIP-199):
+// HTLC ("hash time-locked contract"), the same format used by atomic swaps
+// since 2017 (BIP-199):
 //
 //   OP_IF
-//       OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <hash> OP_EQUALVERIFY <chave de quem resgata>
+//       OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <hash> OP_EQUALVERIFY <claimer's key>
 //   OP_ELSE
-//       <prazo> OP_CHECKLOCKTIMEVERIFY OP_DROP <chave de quem reembolsa>
+//       <deadline> OP_CHECKLOCKTIMEVERIFY OP_DROP <refunder's key>
 //   OP_ENDIF
 //   OP_CHECKSIG
 //
-//   resgate:    <assinatura> <segredo de 32 bytes> 01 <script>
-//   reembolso:  <assinatura> <vazio> <script>          (só depois do prazo: nLockTime ≥ prazo)
+//   claim:   <signature> <32-byte secret> 01 <script>
+//   refund:  <signature> <empty> <script>          (only after the deadline: nLockTime ≥ deadline)
 //
-// OP_SIZE 32 obriga o segredo a ter exatamente 32 bytes — a Krevo exige o mesmo; sem isso, um
-// segredo de tamanho aceito numa rede e recusado na outra poderia travar a troca.
+// OP_SIZE 32 forces the secret to be exactly 32 bytes — Krevo requires the same; without it, a
+// secret whose size is accepted on one chain and rejected on the other could lock up the swap.
 
 import { sha256 } from './address.js';
 
@@ -25,17 +25,17 @@ export const OP = {
   OP_HASH160: 0xa9, OP_CHECKSIG: 0xac, OP_CHECKLOCKTIMEVERIFY: 0xb1, OP_CHECKSEQUENCEVERIFY: 0xb2,
 };
 
-/** Empilhar dados com a codificação mínima. */
+/** Push data with the minimal encoding. */
 export function pushData(b) {
   b = Buffer.from(b);
   if (b.length === 0) return Buffer.from([OP.OP_0]);
   if (b.length <= 75) return Buffer.concat([Buffer.from([b.length]), b]);
   if (b.length <= 255) return Buffer.concat([Buffer.from([OP.OP_PUSHDATA1, b.length]), b]);
   if (b.length <= 520) { const l = Buffer.alloc(2); l.writeUInt16LE(b.length); return Buffer.concat([Buffer.from([OP.OP_PUSHDATA2]), l, b]); }
-  throw new Error('dado grande demais para o script');
+  throw new Error('data too large for the script');
 }
 
-/** Número de script (little-endian, bit de sinal, mínimo). */
+/** Script number (little-endian, sign bit, minimal). */
 export function scriptNum(n) {
   n = BigInt(n);
   if (n === 0n) return Buffer.alloc(0);
@@ -49,8 +49,8 @@ export function scriptNum(n) {
 }
 
 export function decodeScriptNum(b, maxLen = 4) {
-  if (b.length > maxLen) throw new Error('número de script grande demais');
-  if (b.length && (b[b.length - 1] & 0x7f) === 0 && (b.length === 1 || !(b[b.length - 2] & 0x80))) throw new Error('número de script não mínimo');
+  if (b.length > maxLen) throw new Error('script number too large');
+  if (b.length && (b[b.length - 1] & 0x7f) === 0 && (b.length === 1 || !(b[b.length - 2] & 0x80))) throw new Error('non-minimal script number');
   let v = 0n;
   for (let i = b.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(i === b.length - 1 ? b[i] & 0x7f : b[i]);
   return b.length && b[b.length - 1] & 0x80 ? -v : v;
@@ -65,8 +65,8 @@ export function pushNum(n) {
 }
 
 export function htlcScript({ hash, claimPub, refundPub, locktime }) {
-  if (hash.length !== 32 || claimPub.length !== 33 || refundPub.length !== 33) throw new Error('parâmetros da HTLC inválidos');
-  if (!Number.isInteger(locktime) || locktime <= 0 || locktime >= 2 ** 31) throw new Error('prazo da HTLC inválido');
+  if (hash.length !== 32 || claimPub.length !== 33 || refundPub.length !== 33) throw new Error('invalid HTLC parameters');
+  if (!Number.isInteger(locktime) || locktime <= 0 || locktime >= 2 ** 31) throw new Error('invalid HTLC deadline');
   return Buffer.concat([
     Buffer.from([OP.OP_IF, OP.OP_SIZE]), pushNum(32), Buffer.from([OP.OP_EQUALVERIFY, OP.OP_SHA256]),
     pushData(hash), Buffer.from([OP.OP_EQUALVERIFY]), pushData(claimPub),
@@ -75,10 +75,10 @@ export function htlcScript({ hash, claimPub, refundPub, locktime }) {
   ]);
 }
 
-/** scriptPubKey P2WSH (versão 0 + SHA-256 do script). */
+/** P2WSH scriptPubKey (version 0 + SHA-256 of the script). */
 export const p2wshScript = (witnessScript) => Buffer.concat([Buffer.from([0x00, 0x20]), sha256(witnessScript)]);
 
-/** Decompõe um script em operações: [{ op, data? }]. */
+/** Splits a script into operations: [{ op, data? }]. */
 export function parseScript(script) {
   const s = Buffer.from(script), ops = [];
   let pc = 0;
@@ -86,10 +86,10 @@ export function parseScript(script) {
     const op = s[pc++];
     let len = -1;
     if (op >= 1 && op <= 75) len = op;
-    else if (op === OP.OP_PUSHDATA1) { if (pc + 1 > s.length) throw new Error('script truncado'); len = s[pc++]; }
-    else if (op === OP.OP_PUSHDATA2) { if (pc + 2 > s.length) throw new Error('script truncado'); len = s.readUInt16LE(pc); pc += 2; }
+    else if (op === OP.OP_PUSHDATA1) { if (pc + 1 > s.length) throw new Error('truncated script'); len = s[pc++]; }
+    else if (op === OP.OP_PUSHDATA2) { if (pc + 2 > s.length) throw new Error('truncated script'); len = s.readUInt16LE(pc); pc += 2; }
     if (len >= 0) {
-      if (pc + len > s.length) throw new Error('script truncado');
+      if (pc + len > s.length) throw new Error('truncated script');
       ops.push({ op, data: Buffer.from(s.subarray(pc, pc + len)) });
       pc += len;
     } else ops.push({ op });

@@ -34,7 +34,7 @@ export function matureTUtxos(c, keys, i = 0) {
   return tUtxos(c, keys, i).filter((u) => !u.coinbase || daa - u.daa >= c.params.coinbaseMaturity);
 }
 
-/** Varre todas as saídas privadas do virtual e retorna as da carteira (não gastas). */
+/** Scans all private outputs of the virtual and returns the wallet's (unspent) ones. */
 export function scanShielded(c, keys) {
   const v = c.virtual.view, out = [];
   for (let i = 0; i < v.sCount; i++) {
@@ -42,7 +42,7 @@ export function scanShielded(c, keys) {
     const o = { P: Point.fromBytes(e.P), C: Point.fromBytes(e.C), encAmount: e.encAmount, viewTag: e.viewTag };
     const got = scanShieldedOutput(keys.scanKeys, Point.fromBytes(e.R), e.j, o);
     if (!got) continue;
-    const spend = keys.spender(got.k, got.index); // a chave de uso único fica no cofre
+    const spend = keys.spender(got.k, got.index); // the one-time key stays in the vault
     const ki = toHex(spend.keyImage(o.P).toBytes());
     if (v.hasKI(ki)) continue;
     out.push({ outpoint: parseOutpointKey(key), amount: got.v, mask: got.x, spend, P: o.P, C: o.C, daa: e.daa, coinbase: e.coinbase, index: i });
@@ -50,7 +50,7 @@ export function scanShielded(c, keys) {
   return out;
 }
 
-/** Monta um anel: a saída real + iscas maduras aleatórias. */
+/** Builds a ring: the real output + random mature decoys. */
 export function makeRing(c, real) {
   const v = c.virtual.view, p = c.params, daa = c.virtual.gd.daaScore;
   const cands = [];
@@ -62,15 +62,15 @@ export function makeRing(c, real) {
   }
   cands.sort(() => Math.random() - 0.5);
   const ring = [...cands.slice(0, p.ringSize - 1), { outpoint: real.outpoint, P: real.P, C: real.C }];
-  assert.equal(ring.length, p.ringSize, 'iscas suficientes');
+  assert.equal(ring.length, p.ringSize, 'enough decoys');
   return ring.sort(() => Math.random() - 0.5);
 }
 
 /**
- * Bloco de k portas consecutivas LIVRES (nó P2P, RPC, servidores…). Os testes rodam em paralelo:
- * sortear numa faixa estreita fazia dois arquivos pegarem a mesma porta (EADDRINUSE). Faixa
- * 20000–32000 (fora das portas efêmeras do Linux, 32768+, e do Windows, 49152+), conferida ligando
- * cada porta antes de devolver.
+ * Block of k consecutive FREE ports (P2P node, RPC, servers…). The tests run in parallel:
+ * picking within a narrow range made two files grab the same port (EADDRINUSE). Range
+ * 20000–32000 (outside the ephemeral ports of Linux, 32768+, and Windows, 49152+), checked by binding
+ * each port before returning it.
  */
 export async function freePorts(k = 2) {
   const { createServer } = await import('node:net');
@@ -85,5 +85,5 @@ export async function freePorts(k = 2) {
       await Promise.all(servers.map((s) => new Promise((r) => s.close(() => r()))));
     }
   }
-  throw new Error('nenhum bloco de portas livre');
+  throw new Error('no free block of ports');
 }

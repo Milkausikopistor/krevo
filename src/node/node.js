@@ -1,4 +1,4 @@
-// Nó completo: consenso + mempool + P2P + RPC + armazenamento.
+// Full node: consensus + mempool + P2P + RPC + storage.
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { Consensus } from '../consensus/consensus.js';
@@ -15,15 +15,15 @@ export class Node extends EventEmitter {
     this.consensus = new Consensus(params);
     this.mempool = new Mempool(this.consensus);
     this.orphans = new Map();     // hash → { block, missing:Set }
-    this.waiting = new Map();     // pai faltante → Set(filhos órfãos)
+    this.waiting = new Map();     // missing parent → Set(orphan children)
     this.future = new Map();
-    this.stem = new Map();        // transações na fase de haste do Dandelion++ (ainda fora do mempool)
+    this.stem = new Map();        // transactions in Dandelion++'s stem phase (not yet in the mempool)
     this.storage = persist ? new BlockFile(path.join(datadir, params.name)) : null;
     this.p2p = new P2P(this, { port: p2pPort ?? params.defaultP2pPort, peers, log });
     this.rpc = new RpcServer(this, { port: rpcPort ?? params.defaultRpcPort, host: rpcHost });
     this.startedAt = Date.now();
     this.blockTimes = [];
-    this.consensus.on('disqualified', ({ hash, reason }) => log(`bloco ${hash.slice(0, 12)} desqualificado: ${reason}`));
+    this.consensus.on('disqualified', ({ hash, reason }) => log(`block ${hash.slice(0, 12)} disqualified: ${reason}`));
   }
 
   async start() {
@@ -34,12 +34,12 @@ export class Node extends EventEmitter {
         const r = this.consensus.addBlock(b, { trusted: true });
         if (r.status === 'accepted') n++;
       }
-      if (n) this.log(`${n} blocos recarregados do disco em ${((Date.now() - t) / 1000).toFixed(1)} s`);
+      if (n) this.log(`${n} blocks reloaded from disk in ${((Date.now() - t) / 1000).toFixed(1)} s`);
     }
     await this.rpc.start();
     this.p2p.start();
     this.futureTimer = setInterval(() => this._retryFuture(), 1000);
-    this.log(`Krevo ${this.params.name} | P2P :${this.p2p.port} | RPC http://${this.rpc.host}:${this.rpc.port} | gênesis ${this.consensus.genesisHash.slice(0, 16)}…`);
+    this.log(`Krevo ${this.params.name} | P2P :${this.p2p.port} | RPC http://${this.rpc.host}:${this.rpc.port} | genesis ${this.consensus.genesisHash.slice(0, 16)}…`);
   }
 
   async stop() {
@@ -48,7 +48,7 @@ export class Node extends EventEmitter {
     await this.rpc.stop();
   }
 
-  /** Bloco vindo da rede ou do RPC. */
+  /** Block from the network or from RPC. */
   receiveBlock(block, peer = null) {
     const res = this.consensus.addBlock(block);
     switch (res.status) {
@@ -70,7 +70,7 @@ export class Node extends EventEmitter {
         this.future.set(res.hash, { block, peer });
         break;
       case 'invalid':
-        this.log(`bloco inválido ${res.hash.slice(0, 12)}: ${res.reason}`);
+        this.log(`invalid block ${res.hash.slice(0, 12)}: ${res.reason}`);
         if (peer) this.p2p._misbehave(peer, 50, res.reason);
         break;
       default:
@@ -116,10 +116,10 @@ export class Node extends EventEmitter {
     }
   }
 
-  /** Transação local (carteira) → Dandelion++. */
+  /** Local transaction (wallet) → Dandelion++. */
   submitTx(tx) { return this.p2p.receiveTx(tx, null, true); }
 
-  /** Entradas e imagens de chave já comprometidas por transações em fase de haste. */
+  /** Inputs and key images already committed by transactions in the stem phase. */
   stemSpends() {
     const now = Date.now(), outs = new Set(), kis = new Set();
     for (const [id, e] of this.stem) {

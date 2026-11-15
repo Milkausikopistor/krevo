@@ -1,22 +1,22 @@
-// Servidor para CARTEIRAS LEVES — qualquer pessoa roda ao lado de um nó completo e expõe na
-// internet. Ele NÃO recebe chaves e só oferece consultas seguras (somente leitura + transmitir
-// transações já assinadas). O RPC do nó continua fechado em 127.0.0.1.
+// Server for LIGHT WALLETS — anyone can run it next to a full node and expose it to the internet.
+// It does NOT receive keys and only offers safe queries (read-only + broadcasting transactions
+// that are already signed). The node's RPC stays closed on 127.0.0.1.
 //
-//   GET  /v1/info                    ponta da rede (com o cabeçalho, para a carteira checar a PoW)
-//   GET  /v1/compact?start=&count=   saídas privadas compactas, BINÁRIO: 35 bytes por saída
-//   POST /v1/outputs {indices}       saídas privadas completas (a carteira mistura iscas no pedido)
-//   GET  /v1/keyimages/<prefixo>     imagens de chave gastas de um "balde" (1/256 do total)
-//   POST /v1/utxos {locks}           moedas transparentes de endereços (que já são públicos)
-//   GET  /v1/tx/<txid>               transação completa
-//   GET  /v1/proof/<txid>?depth=     prova de aceitação: Merkle + cabeçalhos com PoW por cima
-//   POST /v1/broadcast {tx}          transmite uma transação já assinada
-//   GET  /v1/fcmp/anchor             âncora madura da árvore de todas as saídas privadas
-//   POST /v1/fcmp/path {anchor, chunks}  caminhos de vários pedaços (o real misturado a iscas)
-//   GET  /v1/name/<nome> · POST /v1/names {owners} · GET /v1/history/<endereço>
-//   POST /v1/scan {viewKey,…}        OPCIONAL: varredura delegada (o cliente entrega a chave de
-//                                    visualização; o servidor passa a ver os valores recebidos)
+//   GET  /v1/info                    network tip (with the header, so the wallet can check the PoW)
+//   GET  /v1/compact?start=&count=   compact private outputs, BINARY: 35 bytes per output
+//   POST /v1/outputs {indices}       full private outputs (the wallet mixes decoys into the request)
+//   GET  /v1/keyimages/<prefix>      spent key images of a "bucket" (1/256 of the total)
+//   POST /v1/utxos {locks}           transparent coins of addresses (which are already public)
+//   GET  /v1/tx/<txid>               full transaction
+//   GET  /v1/proof/<txid>?depth=     acceptance proof: Merkle + headers with PoW on top
+//   POST /v1/broadcast {tx}          broadcasts an already signed transaction
+//   GET  /v1/fcmp/anchor             mature anchor of the tree of all private outputs
+//   POST /v1/fcmp/path {anchor, chunks}  paths of several chunks (the real one mixed with decoys)
+//   GET  /v1/name/<name> · POST /v1/names {owners} · GET /v1/history/<address>
+//   POST /v1/scan {viewKey,…}        OPTIONAL: delegated scanning (the client hands over its view
+//                                    key; the server can then see the amounts received)
 //
-// CORS liberado (navegador/celular) e limite de requisições por IP.
+// CORS open (browser/phone) and a per-IP request limit.
 
 import http from 'node:http';
 import { rpc } from '../node/rpcclient.js';
@@ -80,7 +80,7 @@ export async function startLightServer({ params, rpcUrl, port = 8090, host = '12
     if (method === 'POST' && path === '/v1/names') return { json: await call('listnames', { owners: (body.owners ?? []).slice(0, 16) }) };
     if (method === 'GET' && (m = path.match(/^\/v1\/history\/([^/]+)$/))) return { json: await call('getaddresshistory', { address: decodeURIComponent(m[1]) }) };
     if (method === 'POST' && path === '/v1/scan') {
-      // varredura delegada: troca privacidade por economia de bateria/CPU no aparelho
+      // delegated scanning: trades privacy for battery/CPU savings on the device
       const { a, B } = decodeViewKey(params, String(body.viewKey ?? ''));
       const subs = Math.max(1, Math.min(Number(body.subaddresses ?? 1), 1000));
       const table = new Map();
@@ -111,11 +111,11 @@ export async function startLightServer({ params, rpcUrl, port = 8090, host = '12
       let raw = '';
       for await (const c of req) { raw += c; if (raw.length > MAX_BODY) { res.writeHead(413, headers); return res.end(); } }
       const body = raw ? JSON.parse(raw) : {};
-      if (!allow(ip, 1)) return sendJson(res, 429, { error: 'muitas requisições; tente de novo em instantes' });
+      if (!allow(ip, 1)) return sendJson(res, 429, { error: 'too many requests; try again in a moment' });
       onRequest?.({ method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), body });
       const out = await route(req.method, url.pathname.replace(/\/+$/, ''), url.searchParams, body);
-      if (!out) return sendJson(res, 404, { error: 'rota desconhecida' });
-      if (out.cost > 1 && !allow(ip, out.cost - 1)) return sendJson(res, 429, { error: 'muitas requisições; tente de novo em instantes' });
+      if (!out) return sendJson(res, 404, { error: 'unknown route' });
+      if (out.cost > 1 && !allow(ip, out.cost - 1)) return sendJson(res, 429, { error: 'too many requests; try again in a moment' });
       if (out.binary) { res.writeHead(200, { ...headers, 'content-type': 'application/octet-stream' }); return res.end(out.binary); }
       return sendJson(res, 200, out.json);
     } catch (e) {

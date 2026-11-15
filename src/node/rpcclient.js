@@ -1,9 +1,9 @@
-// Cliente RPC (JSON sobre HTTP).
+// RPC client (JSON over HTTP).
 //
-// Conexões HTTP são reaproveitadas (keep-alive). Se a carteira passa vários segundos
-// calculando uma prova, o servidor pode fechar a conexão ociosa exatamente quando ela é
-// reutilizada (ECONNRESET). Nesse caso — e só nele — o pedido é repetido uma vez: as
-// chamadas são idempotentes (retransmitir uma transação já conhecida não muda nada).
+// HTTP connections are reused (keep-alive). If the wallet spends several seconds
+// computing a proof, the server may close the idle connection exactly when it is
+// reused (ECONNRESET). In that case — and only then — the request is retried once: the
+// calls are idempotent (relaying an already-known transaction changes nothing).
 const RETRY = new Set(['ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CLOSED']);
 export async function fetchRetry(url, opts) {
   try { return await fetch(url, opts); } catch (e) {

@@ -1,9 +1,9 @@
-// Cliente da API Esplora — a API REST do mempool.space e do blockstream.info, que também
-// pode ser hospedada por você mesmo (electrs/esplora ou mempool). É assim que a carteira
-// Krevo acompanha a HTLC no Bitcoin sem precisar de um nó Bitcoin completo.
+// Esplora API client — the REST API of mempool.space and blockstream.info, which you can
+// also host yourself (electrs/esplora or mempool). This is how the Krevo wallet watches
+// the HTLC on Bitcoin without needing a full Bitcoin node.
 //
-// Privacidade: o servidor escolhido fica sabendo quais endereços de HTLC você consulta.
-// Para não depender de terceiros, aponte --btc-api para a sua própria instância.
+// Privacy: the chosen server learns which HTLC addresses you query.
+// To avoid depending on third parties, point --btc-api at your own instance.
 
 const DEFAULT_APIS = {
   mainnet: 'https://mempool.space/api',
@@ -15,37 +15,37 @@ export const defaultBtcApi = (netName) => DEFAULT_APIS[netName];
 
 export class Esplora {
   constructor(base) {
-    if (!base) throw new Error('informe a API do Bitcoin (--btc-api URL de um servidor Esplora/mempool)');
+    if (!base) throw new Error('enter the Bitcoin API (--btc-api URL of an Esplora/mempool server)');
     this.base = base.replace(/\/+$/, '');
   }
 
   async _req(path, { method = 'GET', body, json = true } = {}) {
     let r;
     try { r = await fetch(this.base + path, { method, body }); }
-    catch (e) { throw new Error(`não consegui falar com a API do Bitcoin em ${this.base} (${e.cause?.code ?? e.message})`); }
+    catch (e) { throw new Error(`could not talk to the Bitcoin API at ${this.base} (${e.cause?.code ?? e.message})`); }
     const text = await r.text();
     if (!r.ok) throw new Error(`API do Bitcoin respondeu ${r.status}: ${text.slice(0, 300)}`);
     return json ? JSON.parse(text) : text.trim();
   }
 
-  /** Bloco mais recente: { height, time, mtp } (mtp = mediana dos 11 últimos, usada pelo CLTV). */
+  /** Most recent block: { height, time, mtp } (mtp = median of the last 11, used by CLTV). */
   async tip() {
     const hash = await this._req('/blocks/tip/hash', { json: false });
     const b = await this._req(`/block/${hash}`);
     return { hash, height: b.height, time: b.timestamp, mtp: b.mediantime ?? b.timestamp };
   }
 
-  /** Saídas não gastas de um endereço: [{ txid, vout, value, status: { confirmed, block_height } }]. */
+  /** Unspent outputs of an address: [{ txid, vout, value, status: { confirmed, block_height } }]. */
   utxos(address) { return this._req(`/address/${address}/utxo`); }
 
-  /** Transações que tocam o endereço (com as testemunhas das entradas). */
+  /** Transactions touching the address (with the inputs' witnesses). */
   txs(address) { return this._req(`/address/${address}/txs`); }
 
   tx(txid) { return this._req(`/tx/${txid}`); }
 
   broadcast(hex) { return this._req('/tx', { method: 'POST', body: hex, json: false }); }
 
-  /** Taxa sugerida (sat/vB) para confirmar em ~3 blocos; 2 sat/vB se a API não informar. */
+  /** Suggested fee (sat/vB) to confirm within ~3 blocks; 2 sat/vB if the API does not say. */
   async feeRate(target = 3) {
     try {
       const f = await this._req('/fee-estimates');

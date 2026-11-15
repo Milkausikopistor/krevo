@@ -1,6 +1,6 @@
-// Endereços Bitcoin: segwit (Bech32 / Bech32m — BIP-173 e BIP-350) e legados (Base58Check).
-// Só o necessário para trocas atômicas: gerar o endereço P2WSH da HTLC e entender qualquer
-// endereço de destino que o usuário informar (bc1q…, bc1p…, 1…, 3…).
+// Bitcoin addresses: segwit (Bech32 / Bech32m — BIP-173 and BIP-350) and legacy (Base58Check).
+// Only what atomic swaps need: generate the HTLC's P2WSH address and understand any
+// destination address the user enters (bc1q…, bc1p…, 1…, 3…).
 
 import { createHash } from 'node:crypto';
 
@@ -16,11 +16,11 @@ const ALIASES = { main: 'mainnet', bitcoin: 'mainnet', test: 'testnet', testnet3
 export function btcNetwork(nameOrIndex) {
   if (typeof nameOrIndex === 'number') {
     const n = BY_INDEX[nameOrIndex];
-    if (!n) throw new Error('rede Bitcoin desconhecida');
+    if (!n) throw new Error('unknown Bitcoin network');
     return n;
   }
   const n = BTC_NETWORKS[ALIASES[nameOrIndex] ?? nameOrIndex];
-  if (!n) throw new Error(`rede Bitcoin desconhecida: ${nameOrIndex} (use mainnet, testnet, signet ou regtest)`);
+  if (!n) throw new Error(`unknown Bitcoin network: ${nameOrIndex} (use mainnet, testnet, signet or regtest)`);
   return n;
 }
 
@@ -66,29 +66,29 @@ export function encodeSegwit(hrp, version, program) {
 }
 
 export function decodeSegwit(hrp, addr) {
-  if (addr.length > 90) throw new Error('endereço Bitcoin longo demais');
-  if (addr !== addr.toLowerCase() && addr !== addr.toUpperCase()) throw new Error('endereço Bitcoin com maiúsculas e minúsculas misturadas');
+  if (addr.length > 90) throw new Error('Bitcoin address too long');
+  if (addr !== addr.toLowerCase() && addr !== addr.toUpperCase()) throw new Error('Bitcoin address with mixed upper and lower case');
   const s = addr.toLowerCase();
   const pos = s.lastIndexOf('1');
-  if (pos < 1 || pos + 7 > s.length) throw new Error('endereço Bitcoin malformado');
-  if (s.slice(0, pos) !== hrp) throw new Error(`endereço Bitcoin de outra rede (prefixo ${s.slice(0, pos)}, esperado ${hrp})`);
+  if (pos < 1 || pos + 7 > s.length) throw new Error('malformed Bitcoin address');
+  if (s.slice(0, pos) !== hrp) throw new Error(`Bitcoin address from another network (prefix ${s.slice(0, pos)}, expected ${hrp})`);
   const data = [];
   for (const c of s.slice(pos + 1)) {
     const d = CHARSET.indexOf(c);
-    if (d < 0) throw new Error('caractere inválido no endereço Bitcoin');
+    if (d < 0) throw new Error('invalid character in the Bitcoin address');
     data.push(d);
   }
   const c = polymod([...hrpExpand(hrp), ...data]);
   const spec = c === BECH32 ? BECH32 : c === BECH32M ? BECH32M : null;
-  if (!spec) throw new Error('soma de verificação inválida no endereço Bitcoin');
-  if (data.length < 7) throw new Error('endereço Bitcoin sem dados');
+  if (!spec) throw new Error('invalid checksum in the Bitcoin address');
+  if (data.length < 7) throw new Error('Bitcoin address without data');
   const version = data[0];
-  if (version > 16) throw new Error('versão de testemunha inválida');
+  if (version > 16) throw new Error('invalid witness version');
   const prog = convertBits(data.slice(1, -6), 5, 8, false);
-  if (!prog) throw new Error('preenchimento inválido no endereço Bitcoin');
-  if (prog.length < 2 || prog.length > 40) throw new Error('programa de testemunha com tamanho inválido');
-  if (version === 0 && prog.length !== 20 && prog.length !== 32) throw new Error('programa v0 precisa ter 20 ou 32 bytes');
-  if ((version === 0) !== (spec === BECH32)) throw new Error('soma de verificação errada para a versão (Bech32 × Bech32m)');
+  if (!prog) throw new Error('invalid padding in the Bitcoin address');
+  if (prog.length < 2 || prog.length > 40) throw new Error('witness program with invalid length');
+  if (version === 0 && prog.length !== 20 && prog.length !== 32) throw new Error('a v0 program must have 20 or 32 bytes');
+  if ((version === 0) !== (spec === BECH32)) throw new Error('wrong checksum for the version (Bech32 × Bech32m)');
   return { version, program: Buffer.from(prog) };
 }
 
@@ -111,7 +111,7 @@ export function base58checkDecode(s) {
   let n = 0n;
   for (const c of s) {
     const i = B58.indexOf(c);
-    if (i < 0) throw new Error('caractere inválido no endereço Bitcoin');
+    if (i < 0) throw new Error('invalid character in the Bitcoin address');
     n = n * 58n + BigInt(i);
   }
   let hex = n.toString(16);
@@ -120,14 +120,14 @@ export function base58checkDecode(s) {
   let zeros = 0;
   while (s[zeros] === '1') zeros++;
   bytes = Buffer.concat([Buffer.alloc(zeros), bytes]);
-  if (bytes.length < 5) throw new Error('endereço Bitcoin curto demais');
+  if (bytes.length < 5) throw new Error('Bitcoin address too short');
   const payload = bytes.subarray(0, -4);
-  if (!hash256(payload).subarray(0, 4).equals(bytes.subarray(-4))) throw new Error('soma de verificação inválida no endereço Bitcoin');
+  if (!hash256(payload).subarray(0, 4).equals(bytes.subarray(-4))) throw new Error('invalid checksum in the Bitcoin address');
   return Buffer.from(payload);
 }
 
-// --------------------------------------------------------------------- geral
-/** Endereço → { type, script } (scriptPubKey). Lança erro se for de outra rede ou inválido. */
+// --------------------------------------------------------------------- general
+/** Address → { type, script } (scriptPubKey). Throws if it is from another network or invalid. */
 export function decodeBtcAddress(net, str) {
   const s = String(str).trim();
   if (s.toLowerCase().startsWith(net.hrp + '1')) {
@@ -137,17 +137,17 @@ export function decodeBtcAddress(net, str) {
   }
   let payload;
   try { payload = base58checkDecode(s); } catch (e) {
-    if (/^(bc|tb|bcrt)1/i.test(s)) throw new Error(`endereço Bitcoin de outra rede (esta troca usa ${net.name})`);
+    if (/^(bc|tb|bcrt)1/i.test(s)) throw new Error(`Bitcoin address from another network (this swap uses ${net.name})`);
     throw e;
   }
-  if (payload.length !== 21) throw new Error('endereço Bitcoin inválido');
+  if (payload.length !== 21) throw new Error('invalid Bitcoin address');
   const h = payload.subarray(1);
   if (payload[0] === net.p2pkh) return { type: 'p2pkh', script: Buffer.concat([Buffer.from([0x76, 0xa9, 0x14]), h, Buffer.from([0x88, 0xac])]) };
   if (payload[0] === net.p2sh) return { type: 'p2sh', script: Buffer.concat([Buffer.from([0xa9, 0x14]), h, Buffer.from([0x87])]) };
-  throw new Error(`endereço Bitcoin de outra rede (esta troca usa ${net.name})`);
+  throw new Error(`Bitcoin address from another network (this swap uses ${net.name})`);
 }
 
-/** scriptPubKey → endereço (ou null se não for um tipo padrão). */
+/** scriptPubKey → address (or null if it is not a standard type). */
 export function scriptToAddress(net, script) {
   const s = Buffer.from(script);
   const v = s[0] === 0 ? 0 : s[0] >= 0x51 && s[0] <= 0x60 ? s[0] - 0x50 : -1;
@@ -161,5 +161,5 @@ export function scriptToAddress(net, script) {
   return null;
 }
 
-/** Endereço P2WPKH (bc1q…) de uma chave pública comprimida. */
+/** P2WPKH address (bc1q…) of a compressed public key. */
 export const p2wpkhAddress = (net, pub33) => encodeSegwit(net.hrp, 0, hash160(pub33));

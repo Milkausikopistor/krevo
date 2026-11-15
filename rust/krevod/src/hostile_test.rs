@@ -1,7 +1,7 @@
-//! Entradas hostis: nada que chegue da rede (blocos, transações, mensagens P2P, chamadas RPC)
-//! pode derrubar o nó. Dezenas de milhares de mutações de dados válidos e de lixo aleatório
-//! passam pelos decodificadores, pelo tratamento das mensagens dos pares e pelo RPC — qualquer
-//! pânico faz o teste falhar.
+//! Hostile inputs: nothing that arrives from the network (blocks, transactions, P2P messages, RPC calls)
+//! may bring the node down. Tens of thousands of mutations of valid data and of random garbage
+//! go through the decoders, the handling of peer messages and the RPC — any
+//! panic makes the test fail.
 
 use crate::block::{Block, Header};
 use crate::bytes::{from_hex, to_hex};
@@ -12,7 +12,7 @@ use crate::tx::Transaction;
 use serde_json::{json, Value};
 
 struct Rng(u64);
-/// Semente fixa (reprodutível); KREVO_FUZZ_SEED=n muda a semente para explorar mais casos.
+/// Fixed seed (reproducible); KREVO_FUZZ_SEED=n changes the seed to explore more cases.
 fn seed(d: u64) -> u64 { std::env::var("KREVO_FUZZ_SEED").ok().and_then(|s| s.parse::<u64>().ok()).map(|x| (x.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ d) | 1).unwrap_or(d) }
 impl Rng {
     fn next(&mut self) -> u64 { self.0 ^= self.0 << 13; self.0 ^= self.0 >> 7; self.0 ^= self.0 << 17; self.0 }
@@ -20,8 +20,8 @@ impl Rng {
     fn bytes(&mut self, n: usize) -> Vec<u8> { (0..n).map(|_| self.next() as u8).collect() }
 }
 
-/// Mutação de um dado válido: inverte bits, corta, insere, duplica trechos e planta
-/// "varints" enormes (0xfd/0xfe/0xff seguidos de valores gigantes).
+/// Mutation of a valid piece of data: flips bits, truncates, inserts, duplicates stretches and plants
+/// huge "varints" (0xfd/0xfe/0xff followed by giant values).
 fn mutate(rng: &mut Rng, base: &[u8]) -> Vec<u8> {
     let mut v = base.to_vec();
     for _ in 0..1 + rng.below(3) {
@@ -52,8 +52,8 @@ fn decoders_never_panic_on_hostile_bytes() {
     let blocks = genesis_bytes();
     let mut bases: Vec<Vec<u8>> = blocks.clone();
     for b in &blocks {
-        let blk = Block::deserialize(b).expect("gênese válida");
-        assert_eq!(&blk.serialize(), b, "ida e volta");
+        let blk = Block::deserialize(b).expect("valid genesis");
+        assert_eq!(&blk.serialize(), b, "round trip");
         for t in &blk.txs { bases.push(t.serialize()); }
         bases.push(blk.header.serialize(false));
     }
@@ -64,35 +64,35 @@ fn decoders_never_panic_on_hostile_bytes() {
         if let Ok(t) = Transaction::deserialize(&data) { accepted += 1; let _ = t.id(); let _ = t.serialize(); }
         let _ = Header::deserialize(&data);
     }
-    // algumas mutações (ex.: só um bit de um campo livre) continuam decodificáveis — e tudo bem
+    // some mutations (e.g. just one bit of a free field) stay decodable — and that is fine
     assert!(accepted < 40_000);
 }
 
-/// Mensagens P2P hostis (tipos errados, hex inválido, blocos e transações mutados, listas
-/// gigantes) entregues ao tratador do nó: nenhum pânico.
+/// Hostile P2P messages (wrong types, invalid hex, mutated blocks and transactions, giant
+/// lists) delivered to the node's handler: no panic.
 #[test]
 fn hostile_peer_messages_never_panic() {
     let params = get_params("simnet").unwrap();
     let mut n = Node::new(params, None, 0, "127.0.0.1".into(), 0);
     let mut rng = Rng(seed(0x2545_f491_4f6c_dd1d));
-    let gb = n.c.blocks.get(&n.c.genesis_hash).expect("gênese").serialize();
+    let gb = n.c.blocks.get(&n.c.genesis_hash).expect("genesis").serialize();
     let gtx = Block::deserialize(&gb).unwrap().txs[0].serialize();
     let h32 = to_hex(&[0xab; 32]);
     let mut msgs: Vec<Value> = vec![
-        json!(null), json!([]), json!("texto"), json!(7), json!({}), json!({ "t": null }), json!({ "t": 5 }), json!({ "t": "desconhecido" }),
+        json!(null), json!([]), json!("text"), json!(7), json!({}), json!({ "t": null }), json!({ "t": 5 }), json!({ "t": "unknown" }),
         json!({ "t": "hello", "network": 5, "genesis": [], "listen": "x", "nonce": {} }),
         json!({ "t": "hello", "network": "simnet", "genesis": "zz", "listen": u64::MAX }),
         json!({ "t": "getdag", "from": -1 }), json!({ "t": "getdag", "from": "x" }), json!({ "t": "getdag", "from": u64::MAX }),
         json!({ "t": "inv", "blocks": [1, null, "zz", h32, {}], "txs": [h32, "00", 5] }),
-        json!({ "t": "inv", "blocks": "não é lista", "txs": {} }),
+        json!({ "t": "inv", "blocks": "not a list", "txs": {} }),
         json!({ "t": "getblocks", "hashes": "x" }), json!({ "t": "getblocks", "hashes": vec![h32.clone(); 5000] }),
         json!({ "t": "gettxs", "txids": [null, 1, "zz", h32] }),
         json!({ "t": "block" }), json!({ "t": "block", "data": 5 }), json!({ "t": "block", "data": "zz" }), json!({ "t": "block", "data": "0" }),
         json!({ "t": "tx" }), json!({ "t": "tx", "data": [] }), json!({ "t": "tx", "data": "abc", "stem": "sim" }),
         json!({ "t": "addr", "addrs": [":", "a:b", "x".repeat(10_000), 5, "1.2.3.4:99999", "[::1]:1"] }),
         json!({ "t": "addr", "addrs": vec!["9.9.9.9:1"; 5000] }),
-        json!({ "t": "block", "data": to_hex(&gb) }), // repetido: já conhecido
-        json!({ "t": "tx", "data": to_hex(&gtx), "stem": true }), // coinbase solta: inválida
+        json!({ "t": "block", "data": to_hex(&gb) }), // repeated: already known
+        json!({ "t": "tx", "data": to_hex(&gtx), "stem": true }), // a loose coinbase: invalid
     ];
     for _ in 0..3000 {
         msgs.push(json!({ "t": "block", "data": to_hex(&mutate(&mut rng, &gb)) }));
@@ -102,17 +102,17 @@ fn hostile_peer_messages_never_panic() {
         let p = n.test_peer();
         let _ = n.handle(p, m);
     }
-    assert!(n.c.store.gd.len() == 1, "nenhum bloco hostil pode entrar");
-    assert!(n.mempool.txs.is_empty(), "nenhuma transação hostil pode entrar");
+    assert!(n.c.store.gd.len() == 1, "no hostile block may get in");
+    assert!(n.mempool.txs.is_empty(), "no hostile transaction may get in");
 }
 
-/// Todos os métodos RPC com parâmetros hostis: nenhum pânico, só erros.
+/// Every RPC method with hostile parameters: no panic, only errors.
 #[test]
 fn hostile_rpc_params_never_panic() {
     let params = get_params("simnet").unwrap();
     let mut n = Node::new(params, None, 0, "127.0.0.1".into(), 0);
     let mut rng = Rng(seed(0x1234_5678_9abc_def1));
-    let gb = n.c.blocks.get(&n.c.genesis_hash).expect("gênese").serialize();
+    let gb = n.c.blocks.get(&n.c.genesis_hash).expect("genesis").serialize();
     let methods = [
         "getcompactoutputs", "getkeyimagebucket", "getheader", "gettxproof", "resolvename", "listnames", "getinfo", "getblocktemplate",
         "submitblock", "sendrawtransaction", "gettransaction", "gettransactionstatus", "getutxos", "getshieldedoutputs", "getshieldedbyindex",

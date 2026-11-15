@@ -1,6 +1,6 @@
-// Troca atômica Krevo ⇄ Bitcoin, ponta a ponta: nó Krevo real (RPC) + Bitcoin simulado com a
-// API do mempool.space (HTTP) + duas carteiras. Direções: vender KRV e vender BTC; e as falhas:
-// participante some, iniciador some, prazo curto demais, trava de hash na Krevo.
+// Krevo ⇄ Bitcoin atomic swap, end to end: a real Krevo node (RPC) + simulated Bitcoin with the
+// mempool.space API (HTTP) + two wallets. Directions: selling KRV and selling BTC; and the failures:
+// the participant disappears, the initiator disappears, a deadline too short, the hash lock on Krevo.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -37,7 +37,7 @@ async function mineVia(url, address, n) {
   }
 }
 
-/** Ambiente: nó Krevo + Bitcoin simulado + carteiras de Alice e Bob (Alice com KRV). */
+/** Environment: Krevo node + simulated Bitcoin + Alice's and Bob's wallets (Alice with KRV). */
 async function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-swap-test-'));
   const port = await freePorts(4);
@@ -59,7 +59,7 @@ async function setup() {
 
 async function krvBalance(w) { await w.sync(); const b = w.balance(); return b.transparent + b.transparentImmature + b.transparentPending; }
 
-test('trava de hash na Krevo (consenso): segredo certo resgata; errado, ausente ou de outro tamanho não', () => {
+test('hash lock on Krevo (consensus): the right secret claims; a wrong, missing or wrong-size one does not', () => {
   const c = new Consensus(params);
   const clock = new Clock();
   const alice = Keys.random(), bob = Keys.random();
@@ -77,23 +77,23 @@ test('trava de hash na Krevo (consenso): segredo certo resgata; errado, ausente 
     tx.invalidate();
     return tx;
   };
-  // segredo errado não monta nem passa na regra
-  assert.throws(() => spend(0, bob.tKey(0), bob.tKey(0).lock, Buffer.alloc(32, 1)), /segredo/);
+  // a wrong secret neither builds nor passes the rule
+  assert.throws(() => spend(0, bob.tKey(0), bob.tKey(0).lock, Buffer.alloc(32, 1)), /secret/);
   const forged = spend(0, bob.tKey(0), bob.tKey(0).lock, secret);
   forged.tIn[0].sig = Buffer.from(forged.tIn[0].sig);
-  forged.tIn[0].sig.fill(1, forged.tIn[0].sig.length - 98, forged.tIn[0].sig.length - 66); // troca o segredo
+  forged.tIn[0].sig.fill(1, forged.tIn[0].sig.length - 98, forged.tIn[0].sig.length - 66); // replaces the secret
   assert.equal(verifyMultisigWitness(lock, forged.tIn[0].sig, forged.sighash()), false);
   mine(c, alice.tKey(0).lock, [forged], clock);
   assert.equal(c.txStatus(forged.idHex).status, 'unknown');
-  // reembolso antes do prazo: ignorado
+  // refund before the deadline: ignored
   const early = spend(1, alice.tKey(0), alice.tKey(0).lock);
   mine(c, alice.tKey(0).lock, [early], clock);
   assert.equal(c.txStatus(early.idHex).status, 'unknown');
-  // Alice não pode usar o caminho de resgate (é a chave de Bob)
+  // Alice cannot use the claim path (it is Bob's key)
   const steal = spend(0, alice.tKey(0), alice.tKey(0).lock, secret);
   mine(c, alice.tKey(0).lock, [steal], clock);
   assert.equal(c.txStatus(steal.idHex).status, 'unknown');
-  // Bob com o segredo: aceito, e o segredo fica público na testemunha
+  // Bob with the secret: accepted, and the secret becomes public in the witness
   const ok = spend(0, bob.tKey(0), bob.tKey(0).lock, secret);
   mine(c, alice.tKey(0).lock, [ok], clock);
   assert.equal(c.txStatus(ok.idHex).status, 'accepted');
@@ -101,8 +101,8 @@ test('trava de hash na Krevo (consenso): segredo certo resgata; errado, ausente 
   assert.ok(tUtxos(c, bob)[0].amount > 2n * COIN - 100_000n);
 });
 
-test('códigos krx e regras de rede', () => {
-  assert.throws(() => checkPairing(params, 'mainnet'), /bitcoins de verdade/);
+test('krx codes and network rules', () => {
+  assert.throws(() => checkPairing(params, 'mainnet'), /real bitcoins/);
   assert.throws(() => checkPairing(getParams('mainnet'), 'testnet'), /mainnet/);
   checkPairing(params, 'regtest');
   const w = Wallet.create(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'krv-swap-codes-')), 'w.json'), params, 'http://127.0.0.1:1');
@@ -111,12 +111,12 @@ test('códigos krx e regras de rede', () => {
   const d = decodeSwapCode(params, code);
   assert.equal(d.kind, 'offer');
   assert.equal(d.offer.krv, COIN);
-  assert.throws(() => decodeSwapCode(getParams('devnet'), code), /outra rede/);
-  assert.throws(() => createOffer(w, { sell: 'krv', krv: COIN, btc: 50_000n, btcPayout: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4' }), /outra rede/);
-  assert.throws(() => createOffer(w, { sell: 'krv', krv: COIN, btc: 50_000n, btcPayout: p2wpkhAddress(net, pubFromPriv(5n)), iWindow: 3600, pWindow: 3600 }), /1,5×/);
+  assert.throws(() => decodeSwapCode(getParams('devnet'), code), /another network/);
+  assert.throws(() => createOffer(w, { sell: 'krv', krv: COIN, btc: 50_000n, btcPayout: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4' }), /another network/);
+  assert.throws(() => createOffer(w, { sell: 'krv', krv: COIN, btc: 50_000n, btcPayout: p2wpkhAddress(net, pubFromPriv(5n)), iWindow: 3600, pWindow: 3600 }), /1.5×/);
 });
 
-test('troca: Alice VENDE KRV, Bob paga em BTC — ponta a ponta', async () => {
+test('swap: Alice SELLS KRV, Bob pays in BTC — end to end', async () => {
   const e = await setup();
   try {
     const { alice, bob, sim } = e;
@@ -126,9 +126,9 @@ test('troca: Alice VENDE KRV, Bob paga em BTC — ponta a ponta', async () => {
     assert.equal(describeSwap(bob, bob.data.swaps[acc.id]).give, '0,0015 BTC');
     assert.equal((await swapStep(alice, offer.id)).action, 'wait-accept');
     importAcceptance(alice, acc.code);
-    assert.throws(() => importAcceptance(bob, acc.code), /não corresponde/);
+    assert.throws(() => importAcceptance(bob, acc.code), /does not match/);
 
-    // Bob ainda não trava: o iniciador precisa travar primeiro
+    // Bob does not lock yet: the initiator must lock first
     assert.equal((await swapStep(bob, acc.id)).action, 'wait-their-lock');
     const aliceBefore = await krvBalance(alice);
     const s1 = await swapStep(alice, offer.id);
@@ -136,41 +136,41 @@ test('troca: Alice VENDE KRV, Bob paga em BTC — ponta a ponta', async () => {
     await e.mineKrv(1);
     assert.equal((await swapStep(alice, offer.id)).action, 'wait-their-lock');
 
-    // Bob vê o contrato da Alice na Krevo e recebe as instruções de pagamento em BTC
+    // Bob sees Alice's contract on Krevo and gets the BTC payment instructions
     const s2 = await swapStep(bob, acc.id);
     assert.equal(s2.action, 'pay-btc', s2.message);
     assert.match(s2.uri, /^bitcoin:bcrt1q.*\?amount=0\.0015$/);
-    sim.fund(s2.address, SATS);                    // Bob paga pela carteira Bitcoin dele
-    assert.equal((await swapStep(bob, acc.id)).action, 'pay-btc', 'visto, mas sem confirmação');
-    assert.equal((await swapStep(alice, offer.id)).action, 'wait-their-lock', 'Alice espera confirmação');
+    sim.fund(s2.address, SATS);                    // Bob pays from his Bitcoin wallet
+    assert.equal((await swapStep(bob, acc.id)).action, 'pay-btc', 'seen, but not confirmed');
+    assert.equal((await swapStep(alice, offer.id)).action, 'wait-their-lock', 'Alice waits for confirmation');
     sim.mine(1, 5);
     assert.equal((await swapStep(bob, acc.id)).action, 'wait-secret');
 
-    // Alice resgata os BTC — e revela o segredo
+    // Alice claims the BTC — and reveals the secret
     const s3 = await swapStep(alice, offer.id);
     assert.equal(s3.action, 'claim', s3.message);
     sim.mine(1, 5);
     assert.ok(sim.balance(e.btcAddr.alice) > SATS - 2_000n, 'Alice recebeu os BTC');
 
-    // Bob lê o segredo no Bitcoin e resgata os KRV
+    // Bob reads the secret on Bitcoin and claims the KRV
     const s4 = await swapStep(bob, acc.id);
     assert.equal(s4.action, 'claim', s4.message);
     await e.mineKrv(1);
     assert.equal((await swapStep(bob, acc.id)).action, 'done');
     assert.equal((await swapStep(alice, offer.id)).action, 'done');
     const bobKrv = await krvBalance(bob);
-    assert.ok(bobKrv > KRV - 100_000n && bobKrv < KRV, `Bob recebeu ${bobKrv} grãos`);
+    assert.ok(bobKrv > KRV - 100_000n && bobKrv < KRV, `Bob received ${bobKrv} grains`);
     const spent = aliceBefore - (await krvBalance(alice));
-    assert.ok(spent >= KRV && spent < KRV + 100_000n, 'Alice gastou só os KRV + taxa');
-    assert.equal(alice.data.swaps[offer.id].status, 'concluída');
+    assert.ok(spent >= KRV && spent < KRV + 100_000n, 'Alice spent only the KRV + fee');
+    assert.equal(alice.data.swaps[offer.id].status, 'completed');
   } finally { await e.close(); }
 });
 
-test('troca: Alice VENDE BTC, Bob paga em KRV — o segredo aparece na Krevo', async () => {
+test('swap: Alice SELLS BTC, Bob pays in KRV — the secret shows up on Krevo', async () => {
   const e = await setup();
   try {
     const { alice, bob, sim } = e;
-    // aqui quem tem KRV é Bob: Alice manda KRV para ele antes (só para montar o cenário)
+    // here Bob is the one with KRV: Alice sends him KRV first (just to set up the scenario)
     const pre = await alice.send({ to: bob.tAddress, amount: 5n * COIN });
     await e.mineKrv(1);
     await bob.waitAccepted(pre.txid);
@@ -187,10 +187,10 @@ test('troca: Alice VENDE BTC, Bob paga em KRV — o segredo aparece na Krevo', a
     assert.equal(s2.action, 'lock', s2.message);   // Bob trava os KRV
     await e.mineKrv(1);
     const s3 = await swapStep(alice, offer.id);
-    assert.equal(s3.action, 'claim', s3.message);  // Alice resgata os KRV (segredo vai para a Krevo)
+    assert.equal(s3.action, 'claim', s3.message);  // Alice claims the KRV (the secret goes to Krevo)
     await e.mineKrv(1);
     const s4 = await swapStep(bob, acc.id);
-    assert.equal(s4.action, 'claim', s4.message);  // Bob usa o segredo para os BTC
+    assert.equal(s4.action, 'claim', s4.message);  // Bob uses the secret for the BTC
     sim.mine(1, 5);
     assert.ok(sim.balance(e.btcAddr.bob) > SATS - 2_000n, 'Bob recebeu os BTC');
     assert.equal((await swapStep(bob, acc.id)).action, 'done');
@@ -198,7 +198,7 @@ test('troca: Alice VENDE BTC, Bob paga em KRV — o segredo aparece na Krevo', a
   } finally { await e.close(); }
 });
 
-test('troca: participante some → iniciador é reembolsado; prazo curto → participante não trava', async () => {
+test('swap: the participant disappears → the initiator is refunded; a short deadline → the participant does not lock', async () => {
   const e = await setup();
   try {
     const { alice, bob } = e;
@@ -208,7 +208,7 @@ test('troca: participante some → iniciador é reembolsado; prazo curto → par
     const before = await krvBalance(alice);
     assert.equal((await swapStep(alice, offer.id)).action, 'lock');
     await e.mineKrv(1);
-    // 15 dos 20 segundos (150 blocos) passam antes de Bob olhar: tarde demais para ele travar
+    // 15 of the 20 seconds (150 blocks) pass before Bob looks: too late for him to lock
     await e.mineKrv(150);
     const late = await swapStep(bob, acc.id);
     assert.equal(late.action, 'abort', late.message);
@@ -219,13 +219,13 @@ test('troca: participante some → iniciador é reembolsado; prazo curto → par
     assert.equal(r.action, 'refund', r.message);
     await e.mineKrv(1);
     assert.equal((await swapStep(alice, offer.id)).action, 'done');
-    assert.equal(alice.data.swaps[offer.id].status, 'reembolsada');
+    assert.equal(alice.data.swaps[offer.id].status, 'refunded');
     const lost = before - (await krvBalance(alice));
-    assert.ok(lost > 0n && lost < 100_000n, `Alice só perdeu taxas: ${lost} grãos`);
+    assert.ok(lost > 0n && lost < 100_000n, `Alice only lost fees: ${lost} grains`);
   } finally { await e.close(); }
 });
 
-test('troca: iniciador some depois que os dois travaram → cada um recupera o seu; segredo nunca é revelado tarde', async () => {
+test('swap: the initiator disappears after both locked → each one recovers their own; the secret is never revealed late', async () => {
   const e = await setup();
   try {
     const { alice, bob, sim } = e;
@@ -239,19 +239,19 @@ test('troca: iniciador some depois que os dois travaram → cada um recupera o s
     sim.fund(p.address, 60_000n);
     sim.mine(1, 1);
     assert.equal((await swapStep(bob, acc.id)).action, 'wait-secret');
-    // Alice "some". O tempo do Bitcoin passa do prazo de Bob (20 s).
+    // Alice "disappears". Bitcoin's time passes Bob's deadline (20 s).
     sim.mine(8, 30);
     assert.ok(sim.mtp() > Number(p.myContract.locktime));
-    // se Alice voltar agora, ela NÃO revela o segredo (Bob poderia ficar sem tempo)
+    // if Alice comes back now, she does NOT reveal the secret (Bob could run out of time)
     const a = await swapStep(alice, offer.id);
     assert.equal(a.action, 'wait-refund', a.message);
-    // Bob pega os BTC de volta
+    // Bob takes the BTC back
     const r = await swapStep(bob, acc.id);
     assert.equal(r.action, 'refund', r.message);
     sim.mine(1, 1);
     assert.ok(sim.balance(e.btcAddr.bob) > 60_000n - 2_000n);
     assert.equal((await swapStep(bob, acc.id)).action, 'done');
-    // Alice recupera os KRV depois do prazo dela (40 s = 400 blocos)
+    // Alice recovers the KRV after her deadline (40 s = 400 blocks)
     await e.mineKrv(400);
     assert.equal((await swapStep(alice, offer.id)).action, 'refund');
     await e.mineKrv(1);

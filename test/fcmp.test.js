@@ -1,5 +1,5 @@
-// Anonimato do tamanho da rede inteira: provas de pertencimento à árvore de TODAS as saídas
-// privadas (FCMP, árvore de curvas sobre o ciclo secp256k1/secq256k1).
+// Anonymity the size of the whole network: membership proofs for the tree of ALL private
+// outputs (FCMP, curve tree over the secp256k1/secq256k1 cycle).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -32,10 +32,10 @@ import { freePorts } from './helpers.js';
 
 const params = getParams('simnet');
 
-test('fcmp: Bulletproofs de circuito com compromissos vetoriais — provador desonesto não convence', () => {
+test('fcmp: circuit Bulletproofs with vector commitments — a dishonest prover does not convince', () => {
   for (const curve of [E1, E2]) {
     const gens = bpGens(curve, 8);
-    // circuito: o compromisso abre (a, b, c) nas posições 0..2 e prova a·b = c
+    // circuit: the commitment opens (a, b, c) at positions 0..2 and proves a·b = c
     const build = (vals, point) => {
       const cs = new ConstraintSystem(curve.S.m, !!vals);
       cs.addVC(point, vals ? new Map(vals.map((v, i) => [i, v])) : null, vals ? 7n : 0n);
@@ -49,42 +49,42 @@ test('fcmp: Bulletproofs de circuito com compromissos vetoriais — provador des
     const good = [3n, 5n, 15n], Cg = commitTo(good);
     assert.ok(verify(Cg, bpProve(curve, build(good, Cg), new Transcript('t'))), curve.name + ': honesto passa');
     const lie = [3n, 5n, 16n], Cl = commitTo(lie);
-    assert.ok(!verify(Cl, bpProve(curve, build(lie, Cl), new Transcript('t'), { unsafeSkipChecks: true })), curve.name + ': 3·5 ≠ 16 não passa');
-    // abrir o compromisso com valores diferentes dos comprometidos também não passa
-    assert.ok(!verify(Cl, bpProve(curve, build(good, Cl), new Transcript('t'), { unsafeSkipChecks: true })), curve.name + ': abertura falsa não passa');
+    assert.ok(!verify(Cl, bpProve(curve, build(lie, Cl), new Transcript('t'), { unsafeSkipChecks: true })), curve.name + ': 3·5 ≠ 16 does not pass');
+    // opening the commitment with values different from the committed ones does not pass either
+    assert.ok(!verify(Cl, bpProve(curve, build(good, Cl), new Transcript('t'), { unsafeSkipChecks: true })), curve.name + ': a false opening does not pass');
   }
 });
 
-test('fcmp: ciclo de curvas, prova contra a árvore inteira e recusas', () => {
-  // secq256k1 tem exatamente p pontos: o campo de uma curva é a ordem da outra
-  assert.ok(E2.gen('teste').mul(PRIME_P).isInf());
-  assert.ok(E1.gen('teste').mul(E1.order).isInf());
+test('fcmp: curve cycle, proof against the whole tree and rejections', () => {
+  // secq256k1 has exactly p points: one curve's field is the other's order
+  assert.ok(E2.gen('test').mul(PRIME_P).isInf());
+  assert.ok(E1.gen('test').mul(E1.order).isInf());
 
   const branch = 4, outs = [];
   for (let i = 0; i < 21; i++) { const p = randomScalar(), x = randomScalar(), v = BigInt(1000 + i); outs.push({ p, x, v, P: mulG(p), C: commit(v, x) }); }
   const tree = new CurveTree(branch, (i) => ({ key: 'o' + i, P: outs[i].P.toBytes(), C: outs[i].C.toBytes() }));
   const N = 21, i = 6, o = outs[i];
   const root = tree.root(N);
-  assert.equal(root.depth, 3, '21 folhas com 4 filhos por nó → profundidade 3');
+  assert.equal(root.depth, 3, '21 leaves with 4 children per node → depth 3');
   const pm = randomScalar(), msg = Buffer.from('sighash');
   const { proof, keyImage: KI, pseudo } = fcmpProve({ branch, N, path: tree.pathForChunk(N, Math.floor(i / branch)), leafPos: i % branch,
     P: o.P, C: o.C, p: o.p, x: o.x, v: o.v, pseudoMask: pm, msg });
   assert.equal(proof.length, fcmpProofSize(N, branch));
   const ok = (over = {}) => fcmpVerify({ branch, N, root, proof, keyImage: KI, pseudo, msg, ...over });
-  assert.ok(ok(), 'prova válida');
-  assert.ok(KI.equals(keyImage(o.p, o.P)), 'a imagem de chave é a mesma dos anéis: não há gasto duplo entre os dois tipos');
-  assert.ok(!ok({ msg: Buffer.from('outra tx') }), 'presa à transação');
-  assert.ok(!ok({ keyImage: mulG(randomScalar()) }), 'imagem de chave inventada');
-  assert.ok(!ok({ pseudo: commit(o.v + 1n, pm) }), 'valor diferente');
-  assert.ok(!ok({ root: tree.root(20) }), 'outra árvore');
+  assert.ok(ok(), 'valid proof');
+  assert.ok(KI.equals(keyImage(o.p, o.P)), 'the key image is the same as the rings\': no double spend between the two kinds');
+  assert.ok(!ok({ msg: Buffer.from('other tx') }), 'bound to the transaction');
+  assert.ok(!ok({ keyImage: mulG(randomScalar()) }), 'made-up key image');
+  assert.ok(!ok({ pseudo: commit(o.v + 1n, pm) }), 'different amount');
+  assert.ok(!ok({ root: tree.root(20) }), 'another tree');
   const bad = Buffer.from(proof); bad[400] ^= 1;
-  assert.ok(!ok({ proof: bad }), 'prova adulterada');
-  // a saída precisa estar NA árvore: com a árvore de 6 saídas, a de índice 6 não está
+  assert.ok(!ok({ proof: bad }), 'tampered proof');
+  // the output must be IN the tree: with the 6-output tree, the one at index 6 is not
   assert.throws(() => fcmpProve({ branch, N: 6, path: tree.pathForChunk(6, 1), leafPos: 2, P: o.P, C: o.C, p: o.p, x: o.x, v: o.v, pseudoMask: pm, msg }));
 });
 
 const nativeBin = await nativeProver();
-test('fcmp: provador nativo em Rust (krevod provar) — o verificador JavaScript aceita as provas', { skip: !nativeBin && 'krevod não compilado (cd rust/krevod && cargo build --release, ou KREVO_PROVER=…)' }, async () => {
+test('fcmp: native Rust prover (krevod prove) — the JavaScript verifier accepts its proofs', { skip: !nativeBin && 'krevod not built (cd rust/krevod && cargo build --release, or KREVO_PROVER=…)' }, async () => {
   const branch = 4, outs = [];
   for (let i = 0; i < 21; i++) { const p = randomScalar(), x = randomScalar(), v = BigInt(500 + i); outs.push({ p, x, v, P: mulG(p), C: commit(v, x) }); }
   const tree = new CurveTree(branch, (i) => ({ key: 'n' + i, P: outs[i].P.toBytes(), C: outs[i].C.toBytes() }));
@@ -93,17 +93,17 @@ test('fcmp: provador nativo em Rust (krevod provar) — o verificador JavaScript
   const t = Date.now();
   const pres = await fcmpPrepareMany(args);
   const ms = Date.now() - t;
-  assert.equal(parallel.lastProver, 'nativo');
+  assert.equal(parallel.lastProver, 'native');
   cases.forEach(([N, i], k) => {
     const o = outs[i], msg = Buffer.from('nativo ' + N), pm = randomScalar();
     const { proof, keyImage: KI, pseudo } = fcmpFinish(pres[k], { p: o.p, x: o.x, v: o.v, pseudoMask: pm, msg });
     const root = tree.root(N);
-    assert.ok(fcmpVerify({ branch, N, root, proof, keyImage: KI, pseudo, msg }), `prova nativa aceita pelo verificador JS (N=${N})`);
+    assert.ok(fcmpVerify({ branch, N, root, proof, keyImage: KI, pseudo, msg }), `native proof accepted by the JS verifier (N=${N})`);
     assert.ok(KI.equals(keyImage(o.p, o.P)));
     const bad = Buffer.from(proof); bad[500] ^= 1;
     assert.ok(!fcmpVerify({ branch, N, root, proof: bad, keyImage: KI, pseudo, msg }));
   });
-  console.log(`    provador nativo: 3 entradas (profundidades 3, 2 e 1) em ${ms} ms`);
+  console.log(`    native prover: 3 inputs (depths 3, 2 and 1) in ${ms} ms`);
 });
 
 async function mineVia(url, address, n) {
@@ -116,7 +116,7 @@ async function mineVia(url, address, n) {
   }
 }
 
-test('fcmp: pagamento privado provado contra todas as saídas da rede (nó, carteira e carteira leve)', async () => {
+test('fcmp: private payment proven against all the network\'s outputs (node, wallet and light wallet)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-fcmp-'));
   const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
@@ -130,55 +130,55 @@ test('fcmp: pagamento privado provado contra todas as saídas da rede (nó, cart
     const miner = Keys.random();
     const mine = (n) => mineVia(url, miner.tAddress(params), n);
     await mineVia(url, alice.tAddress, 30);
-    await mineVia(url, miner.sAddress(params), 12); // várias saídas privadas de terceiros na árvore
-    // Alice blinda uma moeda e espera ela entrar numa âncora madura
-    await alice.send({ to: alice.sAddress, amount: 5n * COIN, from: 'transparente' });
+    await mineVia(url, miner.sAddress(params), 12); // several third-party private outputs in the tree
+    // Alice shields a coin and waits for it to enter a mature anchor
+    await alice.send({ to: alice.sAddress, amount: 5n * COIN, from: 'transparent' });
     await mine(params.fcmpMaturity + 3);
     await alice.sync();
     assert.equal(alice.balance().shielded, 5n * COIN);
 
-    // privado → privado com FCMP
-    const res = await alice.send({ to: bob.sAddress, amount: 2n * COIN, from: 'privado', memo: 'entre todas' });
+    // private → private with FCMP
+    const res = await alice.send({ to: bob.sAddress, amount: 2n * COIN, from: 'private', memo: 'among all' });
     const raw = Transaction.deserialize(fromHex((await rpc(url, 'gettransaction', { txid: res.txid })).tx));
     assert.equal(raw.sIn.length, 1);
-    assert.equal(raw.sIn[0].ring.length, 0, 'sem anel');
+    assert.equal(raw.sIn[0].ring.length, 0, 'no ring');
     const total = (await rpc(url, 'getshieldedoutputs', { start: 0, count: 0 })).total;
-    assert.ok(raw.sIn[0].anchor >= total - 4 - params.fcmpMaturity && raw.sIn[0].anchor <= total, 'a âncora cobre (quase) todas as saídas');
+    assert.ok(raw.sIn[0].anchor >= total - 4 - params.fcmpMaturity && raw.sIn[0].anchor <= total, 'the anchor covers (almost) all outputs');
     await mine(params.fcmpMaturity + 3);
     await alice.sync();
     await bob.sync();
     assert.equal(bob.balance().shielded, 2n * COIN);
-    assert.deepEqual(bob.history().received.map((r) => r.memo), ['entre todas']);
-    assert.ok(alice.data.sOwned.find((o) => o.keyImage === toHex(raw.sIn[0].keyImage)).spent, 'a moeda gasta aparece como gasta');
+    assert.deepEqual(bob.history().received.map((r) => r.memo), ['among all']);
+    assert.ok(alice.data.sOwned.find((o) => o.keyImage === toHex(raw.sIn[0].keyImage)).spent, 'the spent coin shows as spent');
 
     const c = node.consensus;
-    // gasto duplo: a mesma prova reaproveitada numa tx nova bate na imagem de chave
-    assert.throws(() => validateTxInContext(raw, c.virtual.view, c.virtual.gd.daaScore, params), /gasto duplo/);
-    // âncora imatura: recusada antes de qualquer verificação cara
-    await mineVia(url, miner.sAddress(params), 3); // saídas privadas recém-criadas no fim da árvore
+    // double spend: the same proof reused in a new tx hits the key image
+    assert.throws(() => validateTxInContext(raw, c.virtual.view, c.virtual.gd.daaScore, params), /double spend/);
+    // immature anchor: rejected before any expensive verification
+    await mineVia(url, miner.sAddress(params), 3); // freshly created private outputs at the end of the tree
     const young = Transaction.deserialize(raw.serialize());
     young.sIn[0].anchor = c.utxo.sList.length;
     young.sIn[0].fcmp = Buffer.alloc(fcmpProofSize(young.sIn[0].anchor, params.fcmpBranch));
     young.sIn[0].keyImage = mulG(randomScalar()).toBytes();
     young.invalidate();
-    assert.throws(() => validateTxInContext(young, c.virtual.view, c.virtual.gd.daaScore, params), /âncora recente demais/);
-    // numa rede sem anéis (todas menos a simnet), uma entrada em anel é recusada
+    assert.throws(() => validateTxInContext(young, c.virtual.view, c.virtual.gd.daaScore, params), /anchor too recent/);
+    // on a network without rings (all but simnet), a ring input is rejected
     const noRings = { ...params, ringInputs: false };
     const ringTx = Transaction.deserialize(raw.serialize());
     ringTx.sIn[0] = { ring: Array.from({ length: params.ringSize }, (_, k) => ({ txid: Buffer.alloc(32, k + 1), index: 0 })), pseudo: raw.sIn[0].pseudo, keyImage: raw.sIn[0].keyImage, clsag: Buffer.alloc(32 + 32 * params.ringSize + 33) };
     ringTx.invalidate();
-    assert.throws(() => validateTxStateless(ringTx, noRings), /anel não são aceitas/);
+    assert.throws(() => validateTxStateless(ringTx, noRings), /ring signatures are not accepted/);
 
-    // carteira leve gasta com FCMP pedindo o caminho com pedaços-isca
-    const back = await bob.send({ to: alice.sAddress, amount: COIN, from: 'privado' });
+    // the light wallet spends with FCMP, asking for the path along with decoy chunks
+    const back = await bob.send({ to: alice.sAddress, amount: COIN, from: 'private' });
     const raw2 = Transaction.deserialize(fromHex((await rpc(url, 'gettransaction', { txid: back.txid })).tx));
     assert.equal(raw2.sIn[0].ring.length, 0);
     await mine(params.lightProofDepth + 3);
     assert.equal((await rpc(url, 'gettransactionstatus', { txid: back.txid })).status, 'accepted');
     await bob.sync();
     const bb = bob.balance(), change = bb.shielded + bb.shieldedImmature + bb.unverified;
-    assert.ok(change > COIN * 9n / 10n && change < COIN, `o troco volta para Bob (${JSON.stringify(bb, (k, v) => (typeof v === 'bigint' ? v.toString() : v))})`);
-    console.log(`    entrada privada: ${raw.sIn[0].fcmp.length} B de prova, conjunto de anonimato = ${raw.sIn[0].anchor} saídas`);
+    assert.ok(change > COIN * 9n / 10n && change < COIN, `the change goes back to Bob (${JSON.stringify(bb, (k, v) => (typeof v === 'bigint' ? v.toString() : v))})`);
+    console.log(`    private input: ${raw.sIn[0].fcmp.length} B of proof, anonymity set = ${raw.sIn[0].anchor} outputs`);
   } finally {
     await light.close();
     await node.stop();

@@ -1,6 +1,6 @@
-// Mineradores de CPU.
-//   runMiner      — solo: pede modelos ao próprio nó (getblocktemplate com long polling) e envia blocos.
-//   runPoolMiner  — conecta-se a um pool pelo protocolo de shares (JSON por linha, no estilo Stratum).
+// CPU miners.
+//   runMiner      — solo: asks its own node for templates (getblocktemplate with long polling) and submits blocks.
+//   runPoolMiner  — connects to a pool through the share protocol (one JSON per line, Stratum-style).
 import net from 'node:net';
 import { Worker } from 'node:worker_threads';
 import { rpc } from './rpcclient.js';
@@ -21,7 +21,7 @@ export async function runMiner({ rpcUrl, address, threads = 1, log = console.log
       if (m.type !== 'share') return;
       const hex = jobs.get(m.jobId);
       if (!hex || m.jobId !== current) return;
-      for (const x of workers) x.postMessage({ type: 'pause' }); // um bloco por modelo; o próximo chega em seguida
+      for (const x of workers) x.postMessage({ type: 'pause' }); // one block per template; the next one arrives right after
       current = null;
       const b = Block.deserialize(fromHex(hex));
       b.header.nonce = BigInt(m.nonce);
@@ -31,13 +31,13 @@ export async function runMiner({ rpcUrl, address, threads = 1, log = console.log
       try {
         const r = await rpc(rpcUrl, 'submitblock', { block: toHex(b.serialize()) });
         if (r.status === 'accepted') st.accepted++;
-        else log(`bloco não aceito: ${r.status} ${r.reason ?? ''}`);
-      } catch (e) { log('erro ao enviar bloco: ' + e.message); }
+        else log(`block not accepted: ${r.status} ${r.reason ?? ''}`);
+      } catch (e) { log('error submitting block: ' + e.message); }
     });
   }
   const report = setInterval(() => {
     const s = (Date.now() - st.since) / 1000;
-    log(`hashrate ${(st.hashes / s / 1000).toFixed(1)} kH/s | blocos encontrados ${st.found} | aceitos ${st.accepted}`);
+    log(`hashrate ${(st.hashes / s / 1000).toFixed(1)} kH/s | blocks found ${st.found} | accepted ${st.accepted}`);
     st.hashes = 0; st.since = Date.now();
   }, 10_000);
 
@@ -55,7 +55,7 @@ export async function runMiner({ rpcUrl, address, threads = 1, log = console.log
         for (const w of workers) w.postMessage(job);
       }
     } catch (e) {
-      log('nó indisponível: ' + e.message);
+      log('node unavailable: ' + e.message);
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
@@ -64,7 +64,7 @@ export async function runMiner({ rpcUrl, address, threads = 1, log = console.log
   return st;
 }
 
-/** Minerador de pool: o pool manda trabalhos com um alvo de share; o minerador devolve shares. */
+/** Pool miner: the pool sends jobs with a share target; the miner returns shares. */
 export async function runPoolMiner({ pool, address, worker = 'cpu', threads = 1, log = console.log, signal }) {
   const [host, port] = pool.split(':');
   const workers = spawnWorkers(threads);
@@ -79,7 +79,7 @@ export async function runPoolMiner({ pool, address, worker = 'cpu', threads = 1,
   }
   const report = setInterval(() => {
     const s = (Date.now() - st.since) / 1000;
-    log(`hashrate ${(st.hashes / s / 1000).toFixed(1)} kH/s | shares aceitas ${st.accepted} | rejeitadas ${st.rejected} | blocos do pool achados por você ${st.blocks}`);
+    log(`hashrate ${(st.hashes / s / 1000).toFixed(1)} kH/s | shares accepted ${st.accepted} | rejected ${st.rejected} | pool blocks found by you ${st.blocks}`);
     st.hashes = 0; st.since = Date.now();
   }, 10_000);
 
@@ -100,10 +100,10 @@ export async function runPoolMiner({ pool, address, worker = 'cpu', threads = 1,
           if (msg.method === 'job') {
             for (const w of workers) w.postMessage({ type: 'job', ...msg.params });
           } else if (msg.result?.login) {
-            log(`conectado ao pool ${pool} como ${address.slice(0, 20)}… (${worker})`);
+            log(`connected to pool ${pool} as ${address.slice(0, 20)}… (${worker})`);
           } else if (msg.result?.accepted) {
             st.accepted++;
-            if (msg.result.block) { st.blocks++; log('🎉 sua share virou um BLOCO do pool'); }
+            if (msg.result.block) { st.blocks++; log('🎉 your share became a pool BLOCK'); }
           } else if (msg.error) {
             st.rejected++;
             if (msg.error.startsWith('login')) { log('pool recusou o login: ' + msg.error); signal?.abort?.(); }
@@ -114,7 +114,7 @@ export async function runPoolMiner({ pool, address, worker = 'cpu', threads = 1,
       sock.on('close', () => { for (const w of workers) w.postMessage({ type: 'pause' }); resolve(); });
       signal?.addEventListener?.('abort', () => sock.destroy(), { once: true });
     });
-    if (!signal?.aborted) { log('conexão com o pool perdida; tentando de novo em 2 s'); await new Promise((r) => setTimeout(r, 2000)); }
+    if (!signal?.aborted) { log('connection to the pool lost; retrying in 2 s'); await new Promise((r) => setTimeout(r, 2000)); }
   }
   clearInterval(report);
   for (const w of workers) w.postMessage({ type: 'stop' });

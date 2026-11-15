@@ -1,17 +1,17 @@
-// Estrutura de transação do Krevo: UM formato para os dois mundos.
+// Krevo transaction structure: ONE format for both worlds.
 //
-//  tIn  — entradas transparentes: (txid, índice) + assinatura Schnorr (ou M assinaturas, se multiassinatura)
-//  sIn  — entradas privadas: âncora N (a árvore com as N primeiras saídas privadas) + pseudo-compromisso
-//         + imagem de chave + prova de pertencimento à cadeia inteira (FCMP)
-//         [legado, só na simnet: anel de saídas + CLSAG — codificado com tamanho de anel > 0]
-//  tOut — saídas transparentes: valor público + trava (chave pública)
-//  sOut — saídas privadas: chave efêmera R, chave de uso único P, compromisso C, valor cifrado, etiqueta
+//  tIn  — transparent inputs: (txid, index) + Schnorr signature (or M signatures, if multisig)
+//  sIn  — private inputs: anchor N (the tree of the first N private outputs) + pseudo-commitment
+//         + key image + full-chain membership proof (FCMP)
+//         [legacy, simnet only: ring of outputs + CLSAG — encoded with ring size > 0]
+//  tOut — transparent outputs: public amount + lock (public key)
+//  sOut — private outputs: ephemeral key R, one-time key P, commitment C, encrypted amount, tag
 //
-// Qualquer combinação é válida: transparente→transparente, transparente→privada
-// ("blindar"), privada→privada, privada→transparente ("desblindar").
-// O balanço é provado por uma única regra homomórfica + "assinatura de balanço".
+// Any combination is valid: transparent→transparent, transparent→private
+// ("shielding"), private→private, private→transparent ("unshielding").
+// The balance is proven by a single homomorphic rule + the "balance signature".
 //
-// txid = hash do CORPO (sem assinaturas/provas) → assinaturas não alteram o id.
+// txid = hash of the BODY (without signatures/proofs) → signatures do not change the id.
 
 import { H } from '../crypto/hash.js';
 import { Writer, Reader, toHex } from '../util/bytes.js';
@@ -35,7 +35,7 @@ export class Transaction {
     w.varint(this.sIn.length);
     for (const i of this.sIn) {
       w.varint(i.ring.length);
-      if (!i.ring.length) w.varint(i.anchor); // FCMP: âncora (nº de saídas da árvore)
+      if (!i.ring.length) w.varint(i.anchor); // FCMP: anchor (number of outputs in the tree)
       for (const m of i.ring) { w.bytes(m.txid, 32); w.u32(m.index); }
       w.bytes(i.pseudo, 33); w.bytes(i.keyImage, 33);
     }
@@ -51,7 +51,7 @@ export class Transaction {
 
   serializeWitness() {
     const w = new Writer();
-    for (const i of this.tIn) w.varbytes(i.sig); // 64 bytes (chave única) ou política + M assinaturas
+    for (const i of this.tIn) w.varbytes(i.sig); // 64 bytes (single key) or policy + M signatures
     for (const i of this.sIn) w.varbytes(i.ring.length ? i.clsag : i.fcmp);
     w.varbytes(this.rangeProof);
     if (this.bindingSig) { w.u8(1); w.bytes(this.bindingSig, 64); } else w.u8(0);
@@ -79,15 +79,15 @@ export class Transaction {
     for (let k = 0; k < nSo; k++) tx.sOut.push({ R: r.bytes(33), P: r.bytes(33), C: r.bytes(33), encAmount: r.bytes(8), viewTag: r.u8() });
     tx.fee = r.u64();
     const mass = r.u64();
-    if (mass > 0xffffffffn) throw new Error('massa inválida');
+    if (mass > 0xffffffffn) throw new Error('invalid mass');
     tx.mass = Number(mass);
     tx.payload = r.varbytes(10_000);
-    // testemunha
-    for (const i of tx.tIn) i.sig = r.varbytes(8192); // Schnorr (64), multiassinatura ou híbrida quântica (3.830)
+    // witness
+    for (const i of tx.tIn) i.sig = r.varbytes(8192); // Schnorr (64), multisig or quantum-safe hybrid (3,830)
     for (const i of tx.sIn) { if (i.ring.length) i.clsag = r.varbytes(32 + 32 * 128 + 33); else i.fcmp = r.varbytes(16_384); }
     tx.rangeProof = r.varbytes(4_000);
     const hasB = r.u8();
-    if (hasB > 1) throw new Error('flag inválida');
+    if (hasB > 1) throw new Error('invalid flag');
     tx.bindingSig = hasB ? r.bytes(64) : null;
     return tx;
   }
@@ -104,7 +104,7 @@ export class Transaction {
   get hash() { return (this._hash ??= H('tx/hash', this.id, H('tx/witness', this.serializeWitness()))); }
   get hashHex() { return toHex(this.hash); }
   get size() { return (this._size ??= this.serialize().length); }
-  /** Mensagem assinada por todas as assinaturas da transação. */
+  /** Message signed by every signature of the transaction. */
   sighash() { return H('tx/sighash', this.id); }
   invalidate() { this._id = this._hash = this._size = null; }
 }
@@ -114,5 +114,5 @@ export function parseOutpointKey(k) {
   const [h, i] = k.split(':');
   return { txid: Buffer.from(h, 'hex'), index: Number(i) };
 }
-/** Saídas privadas são numeradas depois das transparentes no mesmo txid. */
+/** Private outputs are numbered after the transparent ones under the same txid. */
 export const shieldedOutpointIndex = (tx, j) => tx.tOut.length + j;

@@ -1,4 +1,4 @@
-//! GHOSTDAG e ajuste de dificuldade (espelha ghostdag.js e difficulty.js).
+//! GHOSTDAG and difficulty adjustment (mirrors ghostdag.js and difficulty.js).
 
 use crate::block::Header;
 use crate::params::Params;
@@ -17,7 +17,7 @@ pub struct GhostdagData {
     pub blue_score: u64,
     pub blue_work: BigUint,
     pub daa_score: u64,
-    /// mergeset sem o pai selecionado, em ordem crescente de trabalho azul
+    /// mergeset without the selected parent, in increasing blue-work order
     pub mergeset_asc: Vec<Hash>,
 }
 
@@ -42,7 +42,7 @@ impl DagStore {
         self.gd.insert(h, gd);
         self.work.insert(h, work);
     }
-    /// a ∈ passado(b) ∪ {b}?
+    /// a ∈ past(b) ∪ {b}?
     pub fn is_ancestor(&self, a: &Hash, b: &Hash) -> bool {
         if a == b { return true; }
         let (ha, hb) = (self.height[a], self.height[b]);
@@ -62,7 +62,7 @@ impl DagStore {
         c.insert((*a, *b), found);
         found
     }
-    /// Ordem por trabalho azul e, no empate, pelo hash.
+    /// Order by blue work and, on a tie, by hash.
     pub fn cmp(&self, a: &Hash, b: &Hash) -> std::cmp::Ordering {
         let (wa, wb) = (&self.gd[a].blue_work, &self.gd[b].blue_work);
         wa.cmp(wb).then_with(|| a.cmp(b))
@@ -99,11 +99,11 @@ impl Ghostdag {
 
     fn blue_anticone_size(&self, s: &DagStore, block: &Hash, ctx: &GhostdagData) -> usize {
         if let Some(&x) = ctx.blues_anticone_sizes.get(block) { return x; }
-        let mut cur = ctx.selected_parent.expect("bloco fora do conjunto azul do contexto");
+        let mut cur = ctx.selected_parent.expect("block outside the context's blue set");
         loop {
             let d = &s.gd[&cur];
             if let Some(&x) = d.blues_anticone_sizes.get(block) { return x; }
-            cur = d.selected_parent.expect("bloco fora do conjunto azul do contexto");
+            cur = d.selected_parent.expect("block outside the context's blue set");
         }
     }
 
@@ -160,7 +160,7 @@ impl Ghostdag {
     }
 }
 
-// ------------------------------------------------------------------ dificuldade
+// ------------------------------------------------------------------ difficulty
 pub fn daa_window(s: &DagStore, gd: &GhostdagData, size: usize) -> Vec<Hash> {
     let mut out = vec![];
     let mut cur = gd;

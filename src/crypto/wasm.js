@@ -1,14 +1,14 @@
-// Núcleo criptográfico das carteiras em Rust, compilado para WebAssembly (rust/krevo-wasm).
+// Wallet cryptographic core in Rust, compiled to WebAssembly (rust/krevo-wasm).
 //
-// Tudo o que toca SEGREDOS passa por aqui quando o módulo está disponível — no Node e no
-// navegador: multiplicações por chaves e máscaras, assinaturas Schnorr, provas de intervalo,
-// provas FCMP e AES-GCM. O núcleo é de tempo constante (sem desvios nem acessos à memória
-// que dependam de segredos), usa nonces "hedged" e confere cada assinatura/prova antes de
-// devolvê-la. É o MESMO código do nó em Rust (rust/krevod/src), conferido contra este nó
-// JavaScript pelos vetores de teste.
+// Everything that touches SECRETS goes through here when the module is available — in Node and
+// in the browser: multiplications by keys and masks, Schnorr signatures, range proofs,
+// FCMP proofs and AES-GCM. The core is constant-time (no branches or memory accesses that
+// depend on secrets), uses "hedged" nonces and checks every signature/proof before returning
+// it. It is the SAME code as the Rust node (rust/krevod/src), checked against this JavaScript
+// node by the test vectors.
 //
-// Se o módulo não carregar (ou com KREVO_NO_WASM=1), o código JavaScript continua funcionando
-// sozinho, como antes — correto, mas sem a garantia de tempo constante.
+// If the module does not load (or with KREVO_NO_WASM=1), the JavaScript code keeps working on
+// its own, as before — correct, but without the constant-time guarantee.
 
 const WASM_URL = new URL('./krevo_core.wasm', import.meta.url);
 const IS_NODE = typeof process !== 'undefined' && !!process.versions?.node;
@@ -20,11 +20,11 @@ const OP = {
 };
 
 function fillRandom(view) {
-  // crypto.getRandomValues aceita no máximo 65536 bytes por chamada
+  // crypto.getRandomValues accepts at most 65536 bytes per call
   for (let o = 0; o < view.length; o += 65536) globalThis.crypto.getRandomValues(view.subarray(o, Math.min(view.length, o + 65536)));
 }
 
-let module = null; // WebAssembly.Module compilado (reaproveitado se a instância precisar ser refeita)
+let module = null; // compiled WebAssembly.Module (reused if the instance has to be rebuilt)
 let inst = null;
 export let loadError = null;
 
@@ -40,9 +40,9 @@ function instantiate() {
 async function load() {
   if (disabled) return;
   try {
-    if (!globalThis.crypto?.getRandomValues) throw new Error('crypto.getRandomValues indisponível');
+    if (!globalThis.crypto?.getRandomValues) throw new Error('crypto.getRandomValues unavailable');
     if (IS_NODE) {
-      // getBuiltinModule: o fs de verdade, mesmo quando "node:fs" é trocado (testes que imitam o navegador)
+      // getBuiltinModule: the real fs, even when "node:fs" is swapped (tests that emulate the browser)
       const fs = process.getBuiltinModule?.('node:fs') ?? (await import('node:fs'));
       module = new WebAssembly.Module(fs.readFileSync(WASM_URL));
     } else {
@@ -52,7 +52,7 @@ async function load() {
     }
     instantiate();
     const st = callRaw(OP.SELFTEST, new Uint8Array(0));
-    if (new TextDecoder().decode(st) !== 'ok') throw new Error('autoteste falhou');
+    if (new TextDecoder().decode(st) !== 'ok') throw new Error('self-test failed');
   } catch (e) {
     module = null; inst = null; loadError = e;
   }
@@ -69,24 +69,24 @@ function callRaw(op, input) {
     if (status !== 0) throw new Error(new TextDecoder().decode(out));
     return out;
   } catch (e) {
-    // Uma armadilha (trap) do WebAssembly deixa a instância num estado indefinido: refaz.
-    if (e instanceof WebAssembly.RuntimeError) { instantiate(); throw new Error(`núcleo criptográfico: ${e.message}`); }
+    // A WebAssembly trap leaves the instance in an undefined state: rebuild it.
+    if (e instanceof WebAssembly.RuntimeError) { instantiate(); throw new Error(`crypto core: ${e.message}`); }
     throw e;
   } finally {
-    try { inst.exports.krevo_free(ptr, len); } catch { /* instância refeita */ }
+    try { inst.exports.krevo_free(ptr, len); } catch { /* instance rebuilt */ }
   }
 }
 
 await load();
 
-/** Chamada crua ao núcleo (bytes → bytes), para testes e medições (rust/krevo-wasm/ct-timing.mjs). */
+/** Raw call to the core (bytes → bytes), for tests and measurements (rust/krevo-wasm/ct-timing.mjs). */
 export const rawCall = (op, input) => callRaw(op, input);
 export { OP };
 
-/** O núcleo em Rust (WebAssembly) está ativo? */
+/** Is the Rust (WebAssembly) core active? */
 export const available = () => inst !== null;
 
-// ---------------------------------------------------------------- conversões
+// ---------------------------------------------------------------- conversions
 function be32(n) {
   const out = new Uint8Array(32);
   for (let i = 31; i >= 0; i--) { out[i] = Number(n & 0xffn); n >>= 8n; }
@@ -106,24 +106,24 @@ const concat = (...parts) => {
 const xy = (out) => (out.length === 0 ? null : [big(out, 0), big(out, 32)]);
 const toBuf = (u8) => (typeof Buffer !== 'undefined' ? Buffer.from(u8) : u8);
 
-// ---------------------------------------------------------------- operações
-/** k·P (P afim [x, y]; k já reduzido mod n). Devolve [x, y] ou null (infinito). */
+// ---------------------------------------------------------------- operations
+/** k·P (affine P [x, y]; k already reduced mod n). Returns [x, y] or null (infinity). */
 export const mul = (x, y, k) => xy(callRaw(OP.MUL, concat(be32(x), be32(y), be32(k))));
 /** k·G. */
 export const mulG = (k) => xy(callRaw(OP.MUL_G, be32(k)));
-/** k·H (gerador de valor dos compromissos de Pedersen). */
+/** k·H (value generator of the Pedersen commitments). */
 export const mulH = (k) => xy(callRaw(OP.MUL_H, be32(k)));
 
-/** Assinatura Schnorr (e, s) com nonce hedged, conferida antes de sair. */
+/** Schnorr signature (e, s) with a hedged nonce, checked before it leaves. */
 export function schnorrSign(x, msg, domain) {
   const d = new TextEncoder().encode(domain);
-  if (d.length > 255) throw new Error('domínio longo demais');
+  if (d.length > 255) throw new Error('domain too long');
   return toBuf(callRaw(OP.SCHNORR, concat(be32(x), Uint8Array.of(d.length), d, msg)));
 }
 
-/** Prova de intervalo agregada. Devolve { V: [33 bytes], proof }. */
+/** Aggregated range proof. Returns { V: [33 bytes], proof }. */
 export function proveRange(values, gammas) {
-  if (values.length < 1 || values.length > 16 || gammas.length !== values.length) throw new Error('bp: número de valores inválido');
+  if (values.length < 1 || values.length > 16 || gammas.length !== values.length) throw new Error('bp: invalid number of values');
   const parts = [Uint8Array.of(values.length)];
   for (let j = 0; j < values.length; j++) {
     const v = new Uint8Array(8);
@@ -137,18 +137,18 @@ export function proveRange(values, gammas) {
   return { V, proof: toBuf(out.slice(33 * values.length)) };
 }
 
-/** AES-256-GCM: devolve { ct, tag }. */
+/** AES-256-GCM: returns { ct, tag }. */
 export function aesGcmEncrypt(key, iv, data) {
   const out = callRaw(OP.AES_ENC, concat(key, iv, data));
   return { ct: out.slice(0, out.length - 16), tag: out.slice(out.length - 16) };
 }
-/** AES-256-GCM: devolve o texto ou lança erro se a etiqueta não confere. */
+/** AES-256-GCM: returns the plaintext or throws if the tag does not match. */
 export const aesGcmDecrypt = (key, iv, ct, tag) => callRaw(OP.AES_DEC, concat(key, iv, ct, tag));
 
-// ---------------------------------------------------------------- FCMP (provas de pertencimento)
+// ---------------------------------------------------------------- FCMP (membership proofs)
 const hex64 = (x) => x.toString(16).padStart(64, '0');
 const hexOf = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
-/** Tarefa no formato do provador nativo (P, C: 33 bytes; r1, r2: BigInt; path com BigInt). */
+/** Job in the native prover's format (P, C: 33 bytes; r1, r2: BigInt; path with BigInt). */
 export function fcmpJob(a, blinds) {
   return {
     branch: a.branch, N: a.N, leafPos: a.leafPos, P: hexOf(a.P), C: hexOf(a.C), r1: hex64(blinds.r1), r2: hex64(blinds.r2),
@@ -156,11 +156,11 @@ export function fcmpJob(a, blinds) {
   };
 }
 const json = (o) => new TextEncoder().encode(JSON.stringify(o));
-/** Uma metade (E1 ou E2) das provas de circuito de uma entrada. */
+/** One half (E1 or E2) of an input's circuit proofs. */
 export const fcmpHalf = (job, half) => toBuf(callRaw(OP.FCMP_HALF, json({ ...job, half })));
-/** Cabeçalho do enunciado (P̂, Î, Ĉ, L̂, nós cegados), com os cegamentos aplicados em tempo constante. */
+/** Statement header (P̂, Î, Ĉ, L̂, blinded nodes), with the blinding applied in constant time. */
 export const fcmpHead = (job) => toBuf(callRaw(OP.FCMP_HEAD, json(job)));
-/** Cabeçalho + as duas metades, autoverificadas. */
+/** Header + both halves, self-verified. */
 export function fcmpPrepare(job) {
   const out = callRaw(OP.FCMP_PREP, json(job));
   const dv = new DataView(out.buffer, out.byteOffset, out.length);
@@ -169,12 +169,12 @@ export function fcmpPrepare(job) {
   const e1l = dv.getUint32(4 + hl, true);
   return { head: toBuf(head), bps: toBuf(out.slice(8 + hl)), e1Len: e1l };
 }
-/** Prova de posse (Schnorr generalizada) da FCMP: ctx 32 bytes, pontos de 33 bytes, w = [p, t, q, y, a, b]. */
+/** Ownership proof (generalized Schnorr) of the FCMP: ctx 32 bytes, 33-byte points, w = [p, t, q, y, a, b]. */
 export const gspProve = (ctx, Phat, Ihat, D, w) => toBuf(callRaw(OP.GSP, concat(ctx, Phat, Ihat, D, ...w.map(be32))));
 
-// ---------------------------------------------------------------- ML-DSA-44 (pós-quântica)
-/** Chave pública ML-DSA-44 a partir da semente de 32 bytes (a mesma do OpenSSL). */
+// ---------------------------------------------------------------- ML-DSA-44 (post-quantum)
+/** ML-DSA-44 public key from the 32-byte seed (the same as OpenSSL's). */
 export const mldsaPub = (seed) => toBuf(callRaw(OP.MLDSA_KEY, seed));
-/** Assinatura ML-DSA-44 hedged, conferida antes de sair. */
+/** Hedged ML-DSA-44 signature, checked before it leaves. */
 export const mldsaSign = (seed, msg) => toBuf(callRaw(OP.MLDSA_SIGN, concat(seed, msg)));
 export const mldsaVerify = (pub, msg, sig) => callRaw(OP.MLDSA_VERIFY, concat(pub, sig, msg))[0] === 1;

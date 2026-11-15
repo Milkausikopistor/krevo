@@ -21,7 +21,7 @@ getrandom = "0.3"
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
 
 [profile.dev]
-# otimizado (ver a nota em ../krevod/Cargo.toml sobre o perfil release nesta máquina)
+# optimized (see the note in ../krevod/Cargo.toml about the release profile on some Windows machines)
 opt-level = 3
 debug = false
 lto = "fat"

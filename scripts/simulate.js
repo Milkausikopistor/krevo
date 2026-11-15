@@ -1,24 +1,24 @@
-// Simulação de rede global (eventos discretos) usando o GHOSTDAG real do projeto.
+// Global network simulation (discrete events) using the project's real GHOSTDAG.
 //
-// 40 nós em 6 continentes, latências reais aproximadas entre regiões, cada nó com
-// 8 pares; mineração Poisson a 10 blocos/s; transações enviadas de nós aleatórios.
-// Mede: propagação de blocos, taxa de blocos vermelhos, largura do DAG e o tempo
-// até uma transação ser aceita pelo DAG do ponto de vista de cada nó do mundo.
+// 40 nodes on 6 continents, approximate real latencies between regions, each node with
+// 8 peers; Poisson mining at 10 blocks/s; transactions sent from random nodes.
+// Measures: block propagation, red block rate, DAG width and the time
+// until a transaction is accepted by the DAG from the point of view of every node in the world.
 //
-//   node scripts/simulate.js [--segundos 300] [--bps 10] [--nos 40]
+//   node scripts/simulate.js [--seconds 300] [--bps 10] [--nodes 40]
 
 import { DagStore, Ghostdag, genesisGhostdag } from '../src/consensus/ghostdag.js';
 import { computeGhostdagK } from '../src/params.js';
 
-const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 ? Number(process.argv[i + 1]) : d; };
-const SECONDS = arg('segundos', 300), BPS = arg('bps', 10), NODES = arg('nos', 40), PEERS = 8;
+const arg = (k, d, legacy) => { const i = Math.max(process.argv.indexOf('--' + k), legacy ? process.argv.indexOf('--' + legacy) : -1); return i > 0 ? Number(process.argv[i + 1]) : d; };
+const SECONDS = arg('seconds', 300, 'segundos'), BPS = arg('bps', 10), NODES = arg('nodes', 40, 'nos'), PEERS = 8;
 const K = computeGhostdagK(BPS, 5);
 let seed = 42;
 const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
 const expo = (rate) => -Math.log(1 - rand()) / rate;
 
-// latência de ida (ms) entre regiões — valores típicos de backbone
-const REG = ['América do Sul', 'América do Norte', 'Europa', 'Ásia', 'Oceania', 'África'];
+// one-way latency (ms) between regions — typical backbone values
+const REG = ['South America', 'North America', 'Europe', 'Asia', 'Oceania', 'Africa'];
 const LAT = [
   [15, 70, 100, 160, 160, 170],
   [70, 25, 45, 80, 80, 120],
@@ -27,7 +27,7 @@ const LAT = [
   [160, 80, 140, 60, 15, 200],
   [170, 120, 80, 140, 200, 40],
 ];
-const BLOCK_HOP_MS = 12; // validação + transmissão de um bloco por salto
+const BLOCK_HOP_MS = 12; // validation + transmission of a block per hop
 const TX_HOP_MS = 3;
 
 const nodes = Array.from({ length: NODES }, (_, i) => ({
@@ -41,7 +41,7 @@ for (const n of nodes) {
 }
 const lat = (a, b) => LAT[a.region][b.region] * (0.8 + 0.4 * rand());
 
-// fila de eventos (heap binário)
+// event queue (binary heap)
 const heap = [];
 const push = (t, f) => { heap.push({ t, f }); let i = heap.length - 1; while (i) { const p = (i - 1) >> 1; if (heap[p].t <= heap[i].t) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
 const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l].t < heap[m].t) m = l; if (r < heap.length && heap[r].t < heap[m].t) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
@@ -53,8 +53,8 @@ store.add('G', [], g, 1n);
 const blocks = new Map([['G', { parents: [], txs: [], created: 0, miner: -1 }]]);
 for (const n of nodes) { n.has.add('G'); n.tips.add('G'); }
 
-const firstSeen = new Map(); // bloco → [tempo em que cada nó recebeu]
-const txs = [];              // { created, from, acceptedAt: Map(nó → t) }
+const firstSeen = new Map(); // block → [time at which each node received it]
+const txs = [];              // { created, from, acceptedAt: Map(node → t) }
 let blockSeq = 0;
 
 function scheduleBlock(m, h, at, from) { push(at, () => receiveBlockAt(m, h, at, from)); }
@@ -90,7 +90,7 @@ function mine(t) {
   receiveBlockAt(n, h, t, null);
 }
 
-// agenda mineração e transações
+// schedule mining and transactions
 const END = SECONDS * 1000;
 for (let t = expo(BPS / 1000); t < END; t += expo(BPS / 1000)) { const tt = t; push(tt, () => mine(tt)); }
 for (let t = 5000; t < END - 10_000; t += expo(5 / 1000)) {
@@ -100,14 +100,14 @@ for (let t = 5000; t < END - 10_000; t += expo(5 / 1000)) {
 }
 while (heap.length) { const e = pop(); e.f(); }
 
-// ------------------------------------------------------------- métricas
+// ------------------------------------------------------------- metrics
 const q = (arr, p) => { const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
 const prop90 = [], propAll = [];
 for (const [h, seen] of firstSeen) {
   const c = blocks.get(h).created, d = seen.filter((x) => x !== null).map((x) => x - c);
   if (d.length === NODES) { prop90.push(q(d, 0.9)); propAll.push(Math.max(...d)); }
 }
-// cor final: percorre a cadeia selecionada do "virtual" global
+// final color: walk the selected chain of the global "virtual"
 const allTips = [...store.gd.keys()].filter((h) => store.children.get(h).length === 0);
 const vgd = gdag.run(allTips.sort((a, b) => -gdag.cmp(a, b)).slice(0, 64));
 let reds = vgd.mergesetReds.length, cur = vgd.selectedParent, chainLen = 0;
@@ -118,11 +118,12 @@ let unconfirmed = 0;
 for (const tx of txs) for (const n of nodes) { const a = tx.acceptedAt.get(n.id); if (a === undefined) unconfirmed++; else lats.push(a - tx.created); }
 
 const ms = (x) => `${Math.round(x)} ms`;
-console.log(`\nSimulação: ${NODES} nós em ${REG.length} continentes, ${BPS} blocos/s, k=${K}, ${SECONDS} s simulados`);
-console.log(`blocos: ${blockSeq} | vermelhos: ${reds} (${(100 * reds / blockSeq).toFixed(2)}%) | mergeset médio: ${(mergesets.reduce((a, b) => a + b, 0) / mergesets.length).toFixed(2)} | cadeia selecionada: ${chainLen}`);
-console.log(`propagação de bloco até 90% dos nós: mediana ${ms(q(prop90, 0.5))}, p95 ${ms(q(prop90, 0.95))} | até 100%: mediana ${ms(q(propAll, 0.5))}`);
-console.log(`transações: ${txs.length} | pares (tx, nó observador): ${lats.length} | não aceitas: ${unconfirmed}`);
-console.log(`TEMPO ATÉ A TX SER ACEITA PELO DAG (envio em qualquer lugar → visto em qualquer lugar):`);
-console.log(`   mediana ${ms(q(lats, 0.5))} | p75 ${ms(q(lats, 0.75))} | p90 ${ms(q(lats, 0.9))} | p99 ${ms(q(lats, 0.99))}`);
-console.log(`   fração aceita em menos de 1 s: ${(100 * lats.filter((x) => x < 1000).length / lats.length).toFixed(1)}%`);
+console.log(`
+Simulation: ${NODES} nodes on ${REG.length} continents, ${BPS} blocks/s, k=${K}, ${SECONDS} simulated seconds`);
+console.log(`blocks: ${blockSeq} | red: ${reds} (${(100 * reds / blockSeq).toFixed(2)}%) | average mergeset: ${(mergesets.reduce((a, b) => a + b, 0) / mergesets.length).toFixed(2)} | selected chain: ${chainLen}`);
+console.log(`block propagation to 90% of nodes: median ${ms(q(prop90, 0.5))}, p95 ${ms(q(prop90, 0.95))} | to 100%: median ${ms(q(propAll, 0.5))}`);
+console.log(`transactions: ${txs.length} | (tx, observer node) pairs: ${lats.length} | not accepted: ${unconfirmed}`);
+console.log(`TIME UNTIL THE TX IS ACCEPTED BY THE DAG (sent from anywhere → seen anywhere):`);
+console.log(`   median ${ms(q(lats, 0.5))} | p75 ${ms(q(lats, 0.75))} | p90 ${ms(q(lats, 0.9))} | p99 ${ms(q(lats, 0.99))}`);
+console.log(`   share accepted in under 1 s: ${(100 * lats.filter((x) => x < 1000).length / lats.length).toFixed(1)}%`);
 export const result = { blocks: blockSeq, reds, prop90: q(prop90, 0.5), latMedian: q(lats, 0.5), lat90: q(lats, 0.9), lat99: q(lats, 0.99) };

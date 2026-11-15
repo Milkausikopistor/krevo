@@ -1,5 +1,5 @@
-// Bech32m (BIP-350) — codificação de endereços com soma de verificação forte.
-// Sem o limite de 90 caracteres (endereços privados têm 67 bytes de dados).
+// Bech32m (BIP-350) — address encoding with a strong checksum.
+// Without the 90-character limit (private addresses have 67 bytes of data).
 
 const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
 const BECH32M_CONST = 0x2bc830a3;
@@ -20,12 +20,12 @@ function convertBits(data, from, to, pad) {
   let acc = 0, bits = 0;
   const out = [], maxv = (1 << to) - 1;
   for (const v of data) {
-    if (v < 0 || v >> from) throw new Error('bech32m: valor inválido');
+    if (v < 0 || v >> from) throw new Error('bech32m: invalid value');
     acc = (acc << from) | v; bits += from;
     while (bits >= to) { bits -= to; out.push((acc >> bits) & maxv); }
   }
   if (pad) { if (bits) out.push((acc << (to - bits)) & maxv); }
-  else if (bits >= from || ((acc << (to - bits)) & maxv)) throw new Error('bech32m: preenchimento inválido');
+  else if (bits >= from || ((acc << (to - bits)) & maxv)) throw new Error('bech32m: invalid padding');
   return out;
 }
 
@@ -39,17 +39,17 @@ export function encode(hrp, bytes) {
 }
 
 export function decode(str) {
-  if (str !== str.toLowerCase() && str !== str.toUpperCase()) throw new Error('bech32m: maiúsculas misturadas');
+  if (str !== str.toLowerCase() && str !== str.toUpperCase()) throw new Error('bech32m: mixed case');
   str = str.toLowerCase();
   const pos = str.lastIndexOf('1');
-  if (pos < 1 || pos + 7 > str.length) throw new Error('bech32m: formato inválido');
+  if (pos < 1 || pos + 7 > str.length) throw new Error('bech32m: invalid format');
   const hrp = str.slice(0, pos);
   const data = [];
   for (const c of str.slice(pos + 1)) {
     const d = CHARSET.indexOf(c);
-    if (d < 0) throw new Error('bech32m: caractere inválido');
+    if (d < 0) throw new Error('bech32m: invalid character');
     data.push(d);
   }
-  if (polymod([...hrpExpand(hrp), ...data]) !== BECH32M_CONST) throw new Error('bech32m: soma de verificação inválida');
+  if (polymod([...hrpExpand(hrp), ...data]) !== BECH32M_CONST) throw new Error('bech32m: invalid checksum');
   return { hrp, bytes: Buffer.from(convertBits(data.slice(0, -6), 5, 8, false)) };
 }

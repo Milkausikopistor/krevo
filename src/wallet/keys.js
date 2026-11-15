@@ -1,34 +1,34 @@
-// Chaves da carteira — todas guardadas no COFRE (src/crypto/vault.js), derivadas da semente:
-//   transparente i:  x_i = Hs("wallet/t", semente, i)
-//   privada:         b = Hs("wallet/spend", semente), a = Hs("wallet/view", semente)
-//   subendereço i:   D_i = B + Hs("subaddr", a, i)·G,  C_i = a·D_i   (i = 0 → endereço principal)
-//   quântico i:      x_i = Hs("wallet/q", semente, i) (Schnorr) + semente ML-DSA = H("wallet/mldsa", semente, i)
-//                    — as duas chaves vêm da mesma frase de 24 palavras
-// Este objeto só guarda dados PÚBLICOS e "assinadores": quem precisa assinar recebe um objeto que
-// assina, nunca a chave.
+// Wallet keys — all kept in the VAULT (src/crypto/vault.js), derived from the seed:
+//   transparent i:  x_i = Hs("wallet/t", seed, i)
+//   private:        b = Hs("wallet/spend", seed), a = Hs("wallet/view", seed)
+//   subaddress i:   D_i = B + Hs("subaddr", a, i)·G,  C_i = a·D_i   (i = 0 → main address)
+//   quantum-safe i: x_i = Hs("wallet/q", seed, i) (Schnorr) + ML-DSA seed = H("wallet/mldsa", seed, i)
+//                   — both keys come from the same 24-word phrase
+// This object only keeps PUBLIC data and "signers": whoever needs to sign gets an object that
+// signs, never the key.
 import { randomBytes } from 'node:crypto';
 import { openVault } from '../crypto/vault.js';
 import { pqLock } from '../consensus/pqlock.js';
 import { transparentData, shieldedData, encodeAddress, encodeViewKey } from '../address.js';
 
 export class Keys {
-  /** seed: 32 bytes. A carteira apaga a sua cópia depois (o cofre guarda a dele). */
+  /** seed: 32 bytes. The wallet wipes its own copy afterwards (the vault keeps its own). */
   constructor(seed) {
-    if (!(seed instanceof Uint8Array) || seed.length !== 32) throw new Error('semente deve ter 32 bytes');
+    if (!(seed instanceof Uint8Array) || seed.length !== 32) throw new Error('the seed must have 32 bytes');
     this.vault = openVault(seed);
     this._t = new Map();
     this._sub = new Map();
     this._q = new Map();
     this.B = this.vault.spendPub();
     const main = this.subaddress(0);
-    this.A = main.C;                  // endereço principal = (a·B, B)
+    this.A = main.C;                  // main address = (a·B, B)
     this.shieldedData = main.data;
   }
   static random() { const s = randomBytes(32); try { return new Keys(s); } finally { s.fill(0); } }
-  /** Apaga as chaves do cofre (a carteira deixa de poder assinar). */
+  /** Wipes the keys from the vault (the wallet can no longer sign). */
   close() { this.vault.close(); }
 
-  /** Chave transparente i: { index, P, lock, signer }. */
+  /** Transparent key i: { index, P, lock, signer }. */
   tKey(i) {
     let k = this._t.get(i);
     if (!k) {
@@ -41,8 +41,8 @@ export class Keys {
   }
 
   /**
-   * Chave quântica i (endereço krq1…): par Schnorr + par ML-DSA-44, ambos no cofre.
-   * { index, P, sPub (33), mldsa: { pub (1.312), sign(msg) }, lock, signer }
+   * Quantum-safe key i (krq1… address): Schnorr pair + ML-DSA-44 pair, both in the vault.
+   * { index, P, sPub (33), mldsa: { pub (1,312), sign(msg) }, lock, signer }
    */
   qKey(i) {
     let k = this._q.get(i);
@@ -56,7 +56,7 @@ export class Keys {
     return k;
   }
 
-  /** Subendereço i: { index, C, D, data }. */
+  /** Subaddress i: { index, C, D, data }. */
   subaddress(i) {
     let s = this._sub.get(i);
     if (!s) {
@@ -67,18 +67,18 @@ export class Keys {
     return s;
   }
 
-  /** Quem gasta a saída privada de escalar k (da varredura) recebida no subendereço sub. */
+  /** Who spends the private output with scalar k (from scanning) received on subaddress sub. */
   spender(k, sub = 0) { return this.vault.spender(k, sub); }
-  /** Assinador da chave de multiassinatura (recuperável pela frase). */
+  /** Signer of the multisig key (recoverable from the phrase). */
   multisigSigner() { return this.vault.signer({ ms: 1 }); }
 
   tAddress(params, i = 0) { return encodeAddress(params, this.tKey(i).lock); }
   qAddress(params, i = 0) { return encodeAddress(params, this.qKey(i).lock); }
   sAddress(params, i = 0) { return encodeAddress(params, this.subaddress(i).data); }
-  /** Exporta a chave de visualização (pedido explícito: quem a tem vê as entradas, mas não gasta). */
+  /** Exports the view key (explicit request: whoever has it sees incoming funds, but cannot spend). */
   viewKey(params) { const { a, B } = this.vault.exportViewKey(); return encodeViewKey(params, a, B); }
 
-  /** Chaves de varredura cobrindo os subendereços 0..count-1 (o segredo a·R é calculado no cofre). */
+  /** Scan keys covering subaddresses 0..count-1 (the secret a·R is computed in the vault). */
   scanKeysFor(count) {
     const table = new Map();
     for (let i = 0; i < count; i++) table.set(this.subaddress(i).D.hex(), i);

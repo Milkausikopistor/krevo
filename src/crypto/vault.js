@@ -1,17 +1,17 @@
-// Cofre de segredos da carteira (ver rust/krevod/src/vault.rs).
+// Wallet secret vault (see rust/krevod/src/vault.rs).
 //
-// A semente entra aqui uma vez; a chave de gasto, a de visualização e todas as chaves derivadas
-// ficam DENTRO do cofre. Quem usa a carteira recebe objetos que sabem ASSINAR, calcular imagens
-// de chave e provar posse — mas que não contêm a chave. Com o núcleo em Rust/WebAssembly, os
-// segredos vivem na memória do núcleo: nada de BigInt (cujas contas têm tempo variável e que não
-// dá para apagar), nada de chave em objetos JavaScript que possam ir parar num arquivo, num log
-// ou num JSON por engano, e tudo é zerado ao fechar a carteira.
+// The seed enters here once; the spend key, the view key and every derived key stay INSIDE the
+// vault. Whoever uses the wallet gets objects that know how to SIGN, compute key images and
+// prove ownership — but that do not contain the key. With the Rust/WebAssembly core, the secrets
+// live in the core's memory: no BigInt (whose arithmetic has variable timing and which cannot be
+// wiped), no key in JavaScript objects that could end up in a file, a log or a JSON by mistake,
+// and everything is zeroed when the wallet is closed.
 //
-// Limite honesto: a memória do WebAssembly é legível por qualquer JavaScript da mesma página ou
-// processo. O cofre não isola contra código malicioso já em execução; ele evita vazamentos por
-// tempo, por descuido e por persistência.
+// Honest limit: WebAssembly memory is readable by any JavaScript in the same page or process.
+// The vault does not isolate against malicious code already running; it prevents leaks through
+// timing, carelessness and persistence.
 //
-// Sem WebAssembly, JsVault faz as mesmas contas em JavaScript (mesma interface e resultados).
+// Without WebAssembly, JsVault does the same computations in JavaScript (same interface and results).
 
 import * as core from './wasm.js';
 import { Point, mulG, modN, hashToScalar } from './secp256k1.js';
@@ -25,28 +25,28 @@ import { ecdsaSign } from '../btc/ecdsa.js';
 import { gspProveWit } from '../fcmp/fcmp.js';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
-// ---------------------------------------------------------------- descritores de chave
-// { t: i } transparente · { q: i } quântica · { ms: 1 } multiassinatura · { swapKrv: i } / { swapBtc: i }
-// troca com Bitcoin · { spend: 1 } chave de gasto (só a pública) · { out: k, sub } saída privada
+// ---------------------------------------------------------------- key descriptors
+// { t: i } transparent · { q: i } quantum-safe · { ms: 1 } multisig · { swapKrv: i } / { swapBtc: i }
+// Bitcoin swap · { spend: 1 } spend key (public part only) · { out: k, sub } private output
 const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b; };
 const be32 = (n) => Buffer.from(modN(n).toString(16).padStart(64, '0'), 'hex');
 function encodeDesc(d) {
   if (d.out !== undefined) return Buffer.concat([Buffer.from([6]), u32(d.sub ?? 0), be32(d.out)]);
   const [kind, i] = d.t !== undefined ? [1, d.t] : d.q !== undefined ? [2, d.q] : d.ms ? [3, 0]
     : d.swapKrv !== undefined ? [4, d.swapKrv] : d.swapBtc !== undefined ? [5, d.swapBtc] : d.spend ? [7, 0] : [0, 0];
-  if (!kind) throw new Error('descritor de chave inválido');
+  if (!kind) throw new Error('invalid key descriptor');
   return Buffer.concat([Buffer.from([kind]), u32(i)]);
 }
 const big = (b) => BigInt('0x' + Buffer.from(b).toString('hex'));
 
-/** Abre um cofre com a semente (32 bytes). Quem chama deve apagar a sua cópia (seed.fill(0)). */
+/** Opens a vault with the seed (32 bytes). The caller must wipe its own copy (seed.fill(0)). */
 export function openVault(seed) {
-  if (!(seed instanceof Uint8Array) || seed.length !== 32) throw new Error('semente deve ter 32 bytes');
+  if (!(seed instanceof Uint8Array) || seed.length !== 32) throw new Error('the seed must have 32 bytes');
   return core.available() ? new WasmVault(seed) : new JsVault(seed);
 }
 
 class VaultBase {
-  /** Objeto que assina com a chave do descritor (a chave não sai do cofre). */
+  /** Object that signs with the descriptor's key (the key never leaves the vault). */
   signer(desc) {
     const v = this;
     let P;
@@ -57,7 +57,7 @@ class VaultBase {
       ecdsa: (hash) => v.ecdsa(desc, hash),
     };
   }
-  /** Objeto que gasta a saída privada com escalar k (da varredura) recebida no subendereço sub. */
+  /** Object that spends the private output with scalar k (from scanning) received on subaddress sub. */
   spender(k, sub = 0) {
     const desc = { out: k, sub };
     return {
@@ -71,8 +71,8 @@ class VaultBase {
   shared(R) { return this.sharedMany([R])[0]; }
 }
 
-// ---------------------------------------------------------------- núcleo WebAssembly
-const closer = typeof FinalizationRegistry !== 'undefined' ? new FinalizationRegistry((h) => { try { core.rawCall(21, h); } catch { /* já fechado */ } }) : null;
+// ---------------------------------------------------------------- WebAssembly core
+const closer = typeof FinalizationRegistry !== 'undefined' ? new FinalizationRegistry((h) => { try { core.rawCall(21, h); } catch { /* already closed */ } }) : null;
 
 class WasmVault extends VaultBase {
   constructor(seed) {
@@ -80,7 +80,7 @@ class WasmVault extends VaultBase {
     this.h = Buffer.from(core.rawCall(20, seed));
     closer?.register(this, this.h, this);
   }
-  _c(op, ...parts) { if (!this.h) throw new Error('cofre fechado'); return Buffer.from(core.rawCall(op, Buffer.concat([this.h, ...parts]))); }
+  _c(op, ...parts) { if (!this.h) throw new Error('vault closed'); return Buffer.from(core.rawCall(op, Buffer.concat([this.h, ...parts]))); }
   close() { if (this.h) { core.rawCall(21, this.h); closer?.unregister(this); this.h = null; } }
   spendPub() { return Point.fromBytes(this._c(22, encodeDesc({ spend: 1 }))); }
   pub(desc) { return Point.fromBytes(this._c(22, encodeDesc(desc))); }
@@ -117,7 +117,7 @@ class WasmVault extends VaultBase {
   unseal(blob) { return this._c(36, Buffer.from(blob)); }
 }
 
-// ---------------------------------------------------------------- plano B em JavaScript
+// ---------------------------------------------------------------- JavaScript fallback
 class JsVault extends VaultBase {
   constructor(seed) {
     super();
@@ -127,20 +127,20 @@ class JsVault extends VaultBase {
     this.B = mulG(this.b);
   }
   close() { this.seed?.fill(0); this.seed = null; this.a = this.b = null; }
-  _seed() { if (!this.seed) throw new Error('cofre fechado'); return this.seed; }
+  _seed() { if (!this.seed) throw new Error('vault closed'); return this.seed; }
   _secret(d) {
     const s = this._seed();
     const x = d.out !== undefined ? modN(d.out + this.b + subaddressScalar(this.a, d.sub ?? 0))
       : d.t !== undefined ? hashToScalar('wallet/t', s, d.t) : d.q !== undefined ? hashToScalar('wallet/q', s, d.q)
         : d.ms ? hashToScalar('wallet/multisig', s) : d.swapKrv !== undefined ? hashToScalar('wallet/swap/krv', s, d.swapKrv)
           : d.swapBtc !== undefined ? hashToScalar('wallet/swap/btc', s, d.swapBtc) : d.spend ? this.b : null;
-    if (x === null) throw new Error('descritor de chave inválido');
+    if (x === null) throw new Error('invalid key descriptor');
     return x;
   }
   _outKey(d, P) {
-    if (d.out === undefined) throw new Error('operação só para chaves de saídas privadas');
+    if (d.out === undefined) throw new Error('operation only for private output keys');
     const p = this._secret(d);
-    if (!mulG(p).equals(P)) throw new Error('a chave não corresponde à saída');
+    if (!mulG(p).equals(P)) throw new Error('the key does not match the output');
     return p;
   }
   spendPub() { this._seed(); return this.B; }
@@ -149,7 +149,7 @@ class JsVault extends VaultBase {
   exportViewKey() { this._seed(); return { a: this.a, B: this.B }; }
   sharedMany(Rs) { this._seed(); return Rs.map((R) => sharedSecret(this.a, R instanceof Point ? R : Point.fromBytes(R))); }
   sign(desc, msg, domain = 'sig') {
-    if (desc.out !== undefined || desc.spend || desc.swapBtc !== undefined) throw new Error('esta chave não assina Schnorr');
+    if (desc.out !== undefined || desc.spend || desc.swapBtc !== undefined) throw new Error('this key does not sign Schnorr');
     return schnorrSign(this._secret(desc), msg, domain);
   }
   _mldsa(i) { return mldsaKeyFromSeed(H('wallet/mldsa', this._seed(), i)); }
@@ -163,7 +163,7 @@ class JsVault extends VaultBase {
   }
   dleq(desc, P, I, ctx) { return dleqProve(this._outKey(desc, P), P, I, ctx); }
   ecdsa(desc, hash) {
-    if (desc.swapBtc === undefined) throw new Error('esta chave não assina ECDSA');
+    if (desc.swapBtc === undefined) throw new Error('this key does not sign ECDSA');
     return ecdsaSign(this._secret(desc), hash);
   }
   nameSalt(name, n) { return H('wallet/name/salt', this._seed(), name, n); }
@@ -176,10 +176,10 @@ class JsVault extends VaultBase {
   }
   unseal(blob) {
     blob = Buffer.from(blob);
-    if (blob.length < 28) throw new Error('dados cifrados curtos');
+    if (blob.length < 28) throw new Error('encrypted data too short');
     const d = createDecipheriv('aes-256-gcm', this._key(), blob.subarray(0, 12));
     d.setAuthTag(blob.subarray(blob.length - 16));
-    try { return Buffer.concat([d.update(blob.subarray(12, blob.length - 16)), d.final()]); } catch { throw new Error('dados da carteira corrompidos ou de outra semente'); }
+    try { return Buffer.concat([d.update(blob.subarray(12, blob.length - 16)), d.final()]); } catch { throw new Error('wallet data corrupted or from another seed'); }
   }
 }
 

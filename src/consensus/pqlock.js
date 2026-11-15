@@ -1,13 +1,13 @@
-// Endereço transparente resistente a computadores quânticos (regra de consenso).
+// Transparent address resistant to quantum computers (consensus rule).
 //
-// Híbrido Schnorr (secp256k1) + ML-DSA-44 (FIPS 204): gastar exige AS DUAS assinaturas.
-//   • Se um computador quântico quebrar secp256k1, o ML-DSA continua protegendo.
-//   • Se surgir uma falha na criptografia de reticulados (mais nova), o Schnorr continua.
-// O endereço guarda só o HASH das duas chaves públicas, então nada útil fica exposto
-// enquanto o dinheiro está parado:
+// Hybrid Schnorr (secp256k1) + ML-DSA-44 (FIPS 204): spending requires BOTH signatures.
+//   • If a quantum computer breaks secp256k1, ML-DSA still protects.
+//   • If a flaw appears in lattice cryptography (newer), Schnorr still protects.
+// The address stores only the HASH of both public keys, so nothing useful is exposed
+// while the money sits still:
 //
-//   trava:       [0x04][H("lock/pq", chave Schnorr (33) ‖ chave ML-DSA (1.312))]   — 33 bytes
-//   testemunha:  [0xF1] ‖ chave Schnorr ‖ chave ML-DSA ‖ assinatura Schnorr (64) ‖ assinatura ML-DSA (2.420)
+//   lock:     [0x04][H("lock/pq", Schnorr key (33) ‖ ML-DSA key (1,312))]   — 33 bytes
+//   witness:  [0xF1] ‖ Schnorr key ‖ ML-DSA key ‖ Schnorr signature (64) ‖ ML-DSA signature (2,420)
 
 import { H } from '../crypto/hash.js';
 import { Point } from '../crypto/secp256k1.js';
@@ -24,11 +24,11 @@ export const isPqWitness = (w) => w.length === PQ_WITNESS_SIZE && w[0] === PQ_WI
 
 export function encodePqWitness(schnorrPub, mldsaPub, schnorrSig, mldsaSig) {
   const w = Buffer.concat([Buffer.from([PQ_WITNESS_VERSION]), schnorrPub, mldsaPub, schnorrSig, mldsaSig]);
-  if (w.length !== PQ_WITNESS_SIZE) throw new Error('testemunha quântica com tamanho inválido');
+  if (w.length !== PQ_WITNESS_SIZE) throw new Error('quantum-safe witness with invalid size');
   return w;
 }
 
-/** Regra de consenso: as duas chaves batem com o endereço e as DUAS assinaturas são válidas. */
+/** Consensus rule: both keys match the address and BOTH signatures are valid. */
 export function verifyPqWitness(lock, witness, msg) {
   if (lock.length !== 33 || lock[0] !== LOCK_PQ || !isPqWitness(witness)) return false;
   let o = 1;

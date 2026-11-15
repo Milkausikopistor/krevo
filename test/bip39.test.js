@@ -10,7 +10,7 @@ import { WORDS } from '../src/wallet/wordlist-en.js';
 import { Wallet } from '../src/wallet/wallet.js';
 import { getParams } from '../src/params.js';
 
-// Vetores oficiais do BIP-39 (trezor/python-mnemonic, frase extra "TREZOR").
+// Official BIP-39 vectors (trezor/python-mnemonic, passphrase "TREZOR").
 const VECTORS = [
   ['00000000000000000000000000000000', 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
     'c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04'],
@@ -26,13 +26,13 @@ const VECTORS = [
     'dd48c104698c30cfe2b6142103248622fb7bb0ff692eebb00089b32d22484e1613912f0a5b694407be899ffd31ed3992c456cdf60f5d4564b8ba3f05a69890ad'],
 ];
 
-test('bip39: lista oficial de 2048 palavras', () => {
+test('bip39: official list of 2048 words', () => {
   assert.equal(WORDS.length, 2048);
   assert.equal(WORDS[0], 'abandon');
   assert.equal(WORDS[2047], 'zoo');
 });
 
-test('bip39: vetores oficiais (frase e semente)', () => {
+test('bip39: official vectors (phrase and seed)', () => {
   for (const [ent, phrase, seed] of VECTORS) {
     assert.equal(entropyToMnemonic(Buffer.from(ent, 'hex')), phrase);
     assert.equal(mnemonicToEntropy(phrase).toString('hex'), ent);
@@ -40,28 +40,28 @@ test('bip39: vetores oficiais (frase e semente)', () => {
   }
 });
 
-test('bip39: geração, prefixos de 4 letras e detecção de erros', () => {
+test('bip39: generation, 4-letter prefixes and error detection', () => {
   for (const n of [12, 24]) {
     const m = generateMnemonic(n);
     assert.equal(m.split(' ').length, n);
     assert.ok(validateMnemonic(m));
-    // aceita só as 4 primeiras letras, maiúsculas e espaços extras
+    // accepts just the first 4 letters, upper case and extra spaces
     const short = '  ' + m.split(' ').map((w) => w.slice(0, 4).toUpperCase()).join('   ') + ' ';
     assert.equal(normalizeMnemonic(short), m);
   }
   const m = generateMnemonic(24).split(' ');
-  // trocar a última palavra por outra quase sempre quebra o checksum
+  // replacing the last word with another one almost always breaks the checksum
   let broken = 0;
   for (let i = 0; i < 50; i++) {
     const alt = [...m.slice(0, 23), WORDS[(WORDS.indexOf(m[23]) + 1 + i) % 2048]].join(' ');
     if (!validateMnemonic(alt)) broken++;
   }
-  assert.ok(broken >= 40, `checksum detectou ${broken}/50 alterações`);
-  assert.throws(() => normalizeMnemonic(m.slice(0, 23).join(' ')), /23 palavras/);
-  assert.throws(() => normalizeMnemonic([...m.slice(0, 5), 'xyzzy', ...m.slice(6)].join(' ')), /palavra 6/);
+  assert.ok(broken >= 40, `checksum detected ${broken}/50 changes`);
+  assert.throws(() => normalizeMnemonic(m.slice(0, 23).join(' ')), /23 words/);
+  assert.throws(() => normalizeMnemonic([...m.slice(0, 5), 'xyzzy', ...m.slice(6)].join(' ')), /word 6/);
 });
 
-test('carteira: restaurar pela frase recria exatamente as mesmas chaves', () => {
+test('wallet: restoring from the phrase recreates exactly the same keys', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-bip39-'));
   const params = getParams('devnet');
   const a = Wallet.create(path.join(dir, 'a.json'), params, '', { password: 'x' });
@@ -70,14 +70,14 @@ test('carteira: restaurar pela frase recria exatamente as mesmas chaves', () => 
   assert.equal(b.tAddress, a.tAddress);
   assert.equal(b.sAddress, a.sAddress);
   assert.equal(b.keys.viewKey(params), a.keys.viewKey(params));
-  // a frase fica cifrada no arquivo quando há senha
+  // the phrase is stored encrypted in the file when there is a password
   assert.ok(!fs.readFileSync(path.join(dir, 'a.json'), 'utf8').includes(a.mnemonic.split(' ')[0] + ' '));
-  // frase extra diferente → carteira diferente (proteção extra contra roubo da frase)
+  // a different passphrase → a different wallet (extra protection against theft of the phrase)
   const c = Wallet.restore(path.join(dir, 'c.json'), params, '', { mnemonic: a.mnemonic, passphrase: 'segredo' });
   assert.notEqual(c.tAddress, a.tAddress);
-  // não sobrescreve um arquivo existente
-  assert.throws(() => Wallet.restore(path.join(dir, 'a.json'), params, '', { mnemonic: a.mnemonic }), /já existe/);
-  // os vetores oficiais também funcionam como frase de carteira
+  // does not overwrite an existing file
+  assert.throws(() => Wallet.restore(path.join(dir, 'a.json'), params, '', { mnemonic: a.mnemonic }), /already exists/);
+  // the official vectors also work as a wallet phrase
   const v = Wallet.restore(path.join(dir, 'v.json'), params, '', { mnemonic: VECTORS[0][1] });
   assert.match(v.tAddress, /^krvdev1/);
 });

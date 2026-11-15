@@ -1,9 +1,9 @@
-// Assinaturas Schnorr (forma (e, s), 64 bytes) sobre secp256k1.
-//   assinar:   k = H(x, P, m, aleatório) ("hedged"); R = kG; e = H(R, P, m); s = k + e·x
-//              — no núcleo em Rust (tempo constante) quando disponível; a assinatura é sempre
-//              conferida antes de sair (uma falha de hardware no meio da conta poderia vazar x)
-//   verificar: R' = sG − eP; aceitar se H(R', P, m) == e
-// Usadas em entradas transparentes e na "assinatura de balanço" (binding signature).
+// Schnorr signatures ((e, s) form, 64 bytes) over secp256k1.
+//   sign:    k = H(x, P, m, random) ("hedged"); R = kG; e = H(R, P, m); s = k + e·x
+//            — in the Rust core (constant time) when available; the signature is always
+//            checked before it leaves (a hardware fault halfway through could leak x)
+//   verify:  R' = sG − eP; accept if H(R', P, m) == e
+// Used for transparent inputs and for the "balance signature" (binding signature).
 
 import { randomBytes } from 'node:crypto';
 import { G, N, mulG, modN, multiexp, hashToScalar, scalarToBytes, scalarFromBytes } from './secp256k1.js';
@@ -11,7 +11,7 @@ import * as core from './wasm.js';
 
 export function schnorrSign(x, msg, domain = 'sig') {
   x = modN(x);
-  if (x === 0n) throw new Error('chave secreta zero');
+  if (x === 0n) throw new Error('zero secret key');
   if (core.available()) return core.schnorrSign(x, msg, domain);
   const P = mulG(x);
   for (;;) {
@@ -22,7 +22,7 @@ export function schnorrSign(x, msg, domain = 'sig') {
     if (e === 0n) continue;
     const s = modN(k + e * x);
     const sig = Buffer.concat([scalarToBytes(e), scalarToBytes(s)]);
-    if (!schnorrVerify(P, msg, sig, domain)) throw new Error('falha ao assinar (verificação da própria assinatura)');
+    if (!schnorrVerify(P, msg, sig, domain)) throw new Error('signing failed (self-verification)');
     return sig;
   }
 }

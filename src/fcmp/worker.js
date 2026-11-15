@@ -1,5 +1,5 @@
-// Thread de prova: calcula UMA das duas provas Bulletproofs de uma entrada (E1 ou E2) —
-// no núcleo em Rust/WebAssembly (wasmJob) ou em JavaScript.
+// Proving thread: computes ONE of an input's two Bulletproofs (E1 or E2) —
+// in the Rust/WebAssembly core (wasmJob) or in JavaScript.
 import { parentPort, workerData } from 'node:worker_threads';
 import * as core from '../crypto/wasm.js';
 import { installGens } from './bp.js';
@@ -9,7 +9,7 @@ import { proveHalf } from './fcmp.js';
 try {
   const { job, half, gens, wasmJob } = workerData;
   if (wasmJob) {
-    if (!core.available()) throw new Error('núcleo WebAssembly indisponível na thread');
+    if (!core.available()) throw new Error('WebAssembly core unavailable in the thread');
     parentPort.postMessage({ proof: core.fcmpHalf(wasmJob, half) });
   } else {
     if (gens) { installGens(E1, gens.E1); installGens(E2, gens.E2); }

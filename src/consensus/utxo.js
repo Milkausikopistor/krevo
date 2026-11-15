@@ -1,11 +1,11 @@
-// Estado UTXO: três conjuntos.
-//   T  — saídas transparentes não gastas (removidas quando gastas)
-//   S  — saídas privadas (nunca removidas: ninguém sabe quais foram gastas!)
-//   KI — imagens de chave já usadas (impede gasto duplo das saídas privadas)
-// e a árvore de curvas sobre TODAS as saídas privadas, na ordem global (para as provas de
-// pertencimento à cadeia inteira — ver src/fcmp/tree.js).
-// O estado é materializado em UM bloco da cadeia (a "base") e se move pela
-// cadeia aplicando/revertendo diffs — é assim que reorganizações são tratadas.
+// UTXO state: three sets.
+//   T  — unspent transparent outputs (removed when spent)
+//   S  — private outputs (never removed: nobody knows which ones were spent!)
+//   KI — key images already used (prevents double spending of private outputs)
+// plus the curve tree over ALL private outputs, in global order (for full-chain membership
+// proofs — see src/fcmp/tree.js).
+// The state is materialized at ONE chain block (the "base") and moves along the chain by
+// applying/reverting diffs — that is how reorganizations are handled.
 
 import { Writer, toHex } from '../util/bytes.js';
 import { parseOutpointKey } from './tx.js';
@@ -29,18 +29,18 @@ export class UtxoDiff {
     this.addT = new Map(); this.remT = new Map();
     this.addS = []; this.addSMap = new Map();
     this.addKI = []; this.addKISet = new Set();
-    this.names = new Map();         // nome → Set(chaves) de registros criados neste diff
+    this.names = new Map();         // name → Set(keys) of records created in this diff
   }
 }
 
-/** Estado materializado. */
+/** Materialized state. */
 export class UtxoSet {
   constructor(fcmpBranch = 256) {
     this.t = new Map(); this.s = new Map(); this.ki = new Set();
-    this.sList = [];                 // ordem global das saídas privadas (= folhas da árvore)
+    this.sList = [];                 // global order of private outputs (= tree leaves)
     this.tree = new CurveTree(fcmpBranch, (i) => { const k = this.sList[i], e = this.s.get(k); return { key: k, P: e.P, C: e.C }; });
-    this.byLock = new Map();         // índice: trava (hex) → Set(chaves) — para carteiras
-    this.byName = new Map();         // índice: nome → Set(chaves) de registros (@nome) — regra de consenso
+    this.byLock = new Map();         // index: lock (hex) → Set(keys) — for wallets
+    this.byName = new Map();         // index: name → Set(keys) of records (@name) — consensus rule
   }
   _idxAdd(key, e) {
     const l = toHex(e.lock);
@@ -68,7 +68,7 @@ export class UtxoSet {
       const [k] = d.addS[i];
       this.s.delete(k);
       const last = this.sList.pop();
-      if (last !== k) throw new Error('ordem de saídas privadas inconsistente');
+      if (last !== k) throw new Error('inconsistent private output order');
     }
     if (d.addS.length) this.tree.truncate(this.sList.length);
     for (const [k, e] of d.addT) { this.t.delete(k); this._idxDel(k, e); }
@@ -76,7 +76,7 @@ export class UtxoSet {
   }
 }
 
-/** Visão = base + diff em construção. Usada para validar transações em sequência. */
+/** View = base + diff under construction. Used to validate transactions in sequence. */
 export class UtxoView {
   constructor(base, diff = new UtxoDiff()) { this.base = base; this.diff = diff; }
   getT(k) {
@@ -96,14 +96,14 @@ export class UtxoView {
     const n = nameOfLock(e.lock);
     if (n) { let s = this.diff.names.get(n); if (!s) this.diff.names.set(n, (s = new Set())); s.add(k); }
   }
-  /** Registros (não gastos) de um nome: [{ key, e }]. Inclui os vencidos — quem decide é a regra. */
+  /** (Unspent) records of a name: [{ key, e }]. Includes expired ones — the rule decides. */
   nameEntries(name) {
     const keys = new Set([...(this.base.byName.get(name) ?? []), ...(this.diff.names.get(name) ?? [])]);
     const out = [];
     for (const key of keys) { const e = this.getT(key); if (e) out.push({ key, e }); }
     return out;
   }
-  /** Todos os nomes com algum registro não gasto. */
+  /** Every name with some unspent record. */
   allNames() { return new Set([...this.base.byName.keys(), ...this.diff.names.keys()]); }
   addS(k, e) { this.diff.addS.push([k, e]); this.diff.addSMap.set(k, e); }
   addKI(ki) { this.diff.addKI.push(ki); this.diff.addKISet.add(ki); }

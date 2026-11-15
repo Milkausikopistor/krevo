@@ -1,5 +1,5 @@
-// Regressão: duas transações seguidas da mesma carteira, com Dandelion++ ativo
-// (a primeira ainda está na "haste", fora do mempool) não podem gastar as mesmas moedas.
+// Regression: two transactions in a row from the same wallet, with Dandelion++ active
+// (the first one is still in the "stem", outside the mempool) must not spend the same coins.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -27,7 +27,7 @@ async function mineVia(url, address, n) {
   }
 }
 
-test('dandelion: envios seguidos não reutilizam moedas que estão na haste', async () => {
+test('dandelion: consecutive sends do not reuse coins that are in the stem', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-dand-'));
   const port = await freePorts(4);
   const n0 = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
@@ -42,11 +42,11 @@ test('dandelion: envios seguidos não reutilizam moedas que estão na haste', as
     const ins = async (txid) => Transaction.deserialize(fromHex((await rpc(url, 'gettransaction', { txid })).tx))
       .tIn.map((i) => `${toHex(i.outpoint.txid)}:${i.outpoint.index}`);
     for (let round = 0; round < 3; round++) {
-      const t1 = await alice.send({ to: bob.tAddress, amount: COIN / 4n, from: 'transparente' });
-      const t2 = await alice.send({ to: bob.tAddress, amount: COIN / 4n, from: 'transparente' }); // imediatamente
+      const t1 = await alice.send({ to: bob.tAddress, amount: COIN / 4n, from: 'transparent' });
+      const t2 = await alice.send({ to: bob.tAddress, amount: COIN / 4n, from: 'transparent' }); // immediately
       const a = await ins(t1.txid), b = await ins(t2.txid);
-      assert.ok(!a.some((k) => b.includes(k)), 'a segunda transação escolheu moedas diferentes');
-      await sleep(4500); // embargo do Dandelion++ termina; transações chegam ao mempool
+      assert.ok(!a.some((k) => b.includes(k)), 'the second transaction chose different coins');
+      await sleep(4500); // the Dandelion++ embargo ends; the transactions reach the mempool
       await mineVia(url, alice.tAddress, 2);
       for (const t of [t1, t2]) assert.equal((await rpc(url, 'gettransactionstatus', { txid: t.txid })).status, 'accepted');
     }

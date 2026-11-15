@@ -1,18 +1,18 @@
 // CLSAG — Concise Linkable Spontaneous Anonymous Group signature
-// (Goodell, Noether, RandomRun, 2019), adaptado para secp256k1 (sem cofator).
+// (Goodell, Noether, RandomRun, 2019), adapted to secp256k1 (no cofactor).
 //
-// Prova, sem revelar QUAL membro do anel é gasto, que o signatário:
-//   1) conhece p tal que P_π = p·G   (é dono da saída real)
-//   2) conhece z tal que C_π − C' = z·G  (o pseudo-compromisso C' tem o mesmo valor)
-// e publica a imagem de chave I = p·Hp(P_π), que é única por saída: gastar a mesma
-// saída duas vezes gera a mesma I, e a rede rejeita imagens repetidas.
+// Proves, without revealing WHICH ring member is spent, that the signer:
+//   1) knows p such that P_π = p·G   (owns the real output)
+//   2) knows z such that C_π − C' = z·G  (the pseudo-commitment C' has the same amount)
+// and publishes the key image I = p·Hp(P_π), which is unique per output: spending the same
+// output twice produces the same I, and the network rejects repeated images.
 
 import { G, N, mulG, modN, multiexp, hashToPoint, hashToScalar, randomScalar, hedgedScalar,
   scalarToBytes, scalarFromBytes, Point } from './secp256k1.js';
 import { H } from './hash.js';
 
 const hpCache = new Map();
-/** Hp(P): ponto de hash usado na imagem de chave. */
+/** Hp(P): hash point used in the key image. */
 export function hashPointForKeyImage(P) {
   const k = P.hex();
   let r = hpCache.get(k);
@@ -36,14 +36,14 @@ function aggCoefs(ring, pseudo, I, D) {
 const roundHash = (prefix, msg, L, R) => hashToScalar('clsag/round', prefix, msg, L, R);
 
 /**
- * ring: [{P: Point, C: Point}], pseudo: Point, pi: índice real,
- * p: chave privada de uso único, z: x_real − x_pseudo.
+ * ring: [{P: Point, C: Point}], pseudo: Point, pi: real index,
+ * p: one-time private key, z: x_real − x_pseudo.
  */
 export function clsagSign(msg, ring, pseudo, pi, p, z) {
   const n = ring.length;
   const HpPi = hashPointForKeyImage(ring[pi].P);
-  if (!mulG(p).equals(ring[pi].P)) throw new Error('clsag: chave não corresponde ao membro real');
-  if (!mulG(z).equals(ring[pi].C.sub(pseudo))) throw new Error('clsag: compromisso não corresponde');
+  if (!mulG(p).equals(ring[pi].P)) throw new Error('clsag: key does not match the real member');
+  if (!mulG(z).equals(ring[pi].C.sub(pseudo))) throw new Error('clsag: commitment does not match');
   const I = HpPi.mul(p), D = HpPi.mul(z);
   const { muP, muC, prefix } = aggCoefs(ring, pseudo, I, D);
   const Wtilde = multiexp([muP, muC], [I, D]);
@@ -61,8 +61,8 @@ export function clsagSign(msg, ring, pseudo, pi, p, z) {
   }
   s[pi] = modN(alpha - c[pi] * w);
   const sig = { c0: c[0], s, I, D };
-  // confere antes de sair: uma falha no meio da conta não pode virar uma assinatura que vaza p
-  if (!clsagVerify(msg, ring, pseudo, sig)) throw new Error('clsag: falha ao assinar (verificação da própria assinatura)');
+  // check before returning: a fault halfway through cannot become a signature that leaks p
+  if (!clsagVerify(msg, ring, pseudo, sig)) throw new Error('clsag: signing failed (self-verification)');
   return sig;
 }
 
@@ -81,12 +81,12 @@ export function clsagVerify(msg, ring, pseudo, sig) {
   return c === c0;
 }
 
-/** Serialização da parte "testemunha" (a imagem de chave I fica no corpo da tx). */
+/** Serialization of the "witness" part (the key image I goes in the tx body). */
 export function encodeClsag(sig) {
   return Buffer.concat([scalarToBytes(sig.c0), ...sig.s.map(scalarToBytes), sig.D.toBytes()]);
 }
 export function decodeClsag(buf, n, I) {
-  if (buf.length !== 32 + 32 * n + 33) throw new Error('clsag: tamanho inválido');
+  if (buf.length !== 32 + 32 * n + 33) throw new Error('clsag: invalid size');
   const c0 = scalarFromBytes(buf.subarray(0, 32));
   const s = [];
   for (let i = 0; i < n; i++) s.push(scalarFromBytes(buf.subarray(32 + 32 * i, 64 + 32 * i)));

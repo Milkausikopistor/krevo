@@ -1,5 +1,5 @@
-//! Serialização binária canônica (igual a src/util/bytes.js): little-endian e varints estilo
-//! Bitcoin; o leitor é estrito (varint não canônico, limite ou fim inesperado → erro).
+//! Canonical binary serialization (same as src/util/bytes.js): little-endian and Bitcoin-style
+//! varints; the reader is strict (non-canonical varint, limit or unexpected end → error).
 
 pub type Res<T> = Result<T, String>;
 
@@ -25,7 +25,7 @@ pub struct Reader<'a> { pub buf: &'a [u8], pub pos: usize }
 impl<'a> Reader<'a> {
     pub fn new(buf: &'a [u8]) -> Self { Reader { buf, pos: 0 } }
     fn need(&self, n: usize) -> Res<()> {
-        if self.pos + n > self.buf.len() { Err("fim inesperado dos dados".into()) } else { Ok(()) }
+        if self.pos + n > self.buf.len() { Err("unexpected end of data".into()) } else { Ok(()) }
     }
     pub fn u8(&mut self) -> Res<u8> { self.need(1)?; self.pos += 1; Ok(self.buf[self.pos - 1]) }
     pub fn u16(&mut self) -> Res<u16> { let b = self.bytes(2)?; Ok(u16::from_le_bytes(b.try_into().unwrap())) }
@@ -34,12 +34,12 @@ impl<'a> Reader<'a> {
     pub fn varint(&mut self, max: u64) -> Res<u64> {
         let f = self.u8()?;
         let v = match f {
-            0xfd => { let v = self.u16()? as u64; if v < 0xfd { return Err("varint não canônico".into()); } v }
-            0xfe => { let v = self.u32()? as u64; if v <= 0xffff { return Err("varint não canônico".into()); } v }
-            0xff => { let v = self.u64()?; if v <= 0xffff_ffff { return Err("varint não canônico".into()); } v }
+            0xfd => { let v = self.u16()? as u64; if v < 0xfd { return Err("non-canonical varint".into()); } v }
+            0xfe => { let v = self.u32()? as u64; if v <= 0xffff { return Err("non-canonical varint".into()); } v }
+            0xff => { let v = self.u64()?; if v <= 0xffff_ffff { return Err("non-canonical varint".into()); } v }
             x => x as u64,
         };
-        if v > max { return Err(format!("varint acima do limite ({v} > {max})")); }
+        if v > max { return Err(format!("varint above the limit ({v} > {max})")); }
         Ok(v)
     }
     pub fn bytes(&mut self, n: usize) -> Res<&'a [u8]> {
@@ -51,7 +51,7 @@ impl<'a> Reader<'a> {
     pub fn arr<const L: usize>(&mut self) -> Res<[u8; L]> { Ok(self.bytes(L)?.try_into().unwrap()) }
     pub fn varbytes(&mut self, max: u64) -> Res<&'a [u8]> { let n = self.varint(max)? as usize; self.bytes(n) }
     pub fn end(&self) -> Res<()> {
-        if self.pos != self.buf.len() { Err("bytes sobrando após o fim da estrutura".into()) } else { Ok(()) }
+        if self.pos != self.buf.len() { Err("leftover bytes after the end of the structure".into()) } else { Ok(()) }
     }
     pub fn remaining(&self) -> usize { self.buf.len() - self.pos }
 }
@@ -59,12 +59,12 @@ impl<'a> Reader<'a> {
 pub fn to_hex(b: &[u8]) -> String { crate::field::hex(b) }
 
 pub fn from_hex(s: &str) -> Res<Vec<u8>> {
-    if s.len() % 2 != 0 { return Err("hex inválido".into()); }
+    if s.len() % 2 != 0 { return Err("invalid hex".into()); }
     let v: Result<Vec<u8>, _> = (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16)).collect();
-    v.map_err(|_| "hex inválido".to_string())
+    v.map_err(|_| "invalid hex".to_string())
 }
 
 pub fn from_hex32(s: &str) -> Res<[u8; 32]> {
     let v = from_hex(s)?;
-    v.try_into().map_err(|_| "hash inválido".to_string())
+    v.try_into().map_err(|_| "invalid hash".to_string())
 }

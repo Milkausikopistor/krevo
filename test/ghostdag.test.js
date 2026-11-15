@@ -11,7 +11,7 @@ function makeDag(k) {
   return { store, gd, add };
 }
 
-test('ghostdag: blocos paralelos honestos são todos azuis', () => {
+test('ghostdag: honest parallel blocks are all blue', () => {
   const { add } = makeDag(3);
   add('x1', ['g']); add('x2', ['g']); add('x3', ['g']);
   const y = add('y', ['x1', 'x2', 'x3']);
@@ -21,7 +21,7 @@ test('ghostdag: blocos paralelos honestos são todos azuis', () => {
   assert.equal(y.daaScore, 4);
 });
 
-test('ghostdag: cadeia secreta de um atacante fica vermelha', () => {
+test('ghostdag: an attacker\'s secret chain turns red', () => {
   const { add } = makeDag(3);
   let prev = 'g';
   for (let i = 1; i <= 10; i++) { add('h' + i, [prev]); prev = 'h' + i; }
@@ -30,16 +30,16 @@ test('ghostdag: cadeia secreta de um atacante fica vermelha', () => {
   const m = add('m', ['h10', 'a5']);
   assert.equal(m.selectedParent, 'h10');
   assert.deepEqual(m.mergesetBlues, ['h10']);
-  assert.equal(m.mergesetReds.length, 5, 'os 5 blocos secretos são vermelhos');
+  assert.equal(m.mergesetReds.length, 5, 'the 5 secret blocks are red');
   assert.equal(m.blueScore, 11);
-  assert.equal(m.daaScore, 16, 'mas todos contam para o DAA (hashrate)');
+  assert.equal(m.daaScore, 16, 'but they all count for the DAA (hashrate)');
 });
 
-test('ghostdag: anticone acima de k vira vermelho mesmo sendo honesto', () => {
+test('ghostdag: an anticone above k turns red even when honest', () => {
   const { add } = makeDag(2);
-  // 4 blocos paralelos: com k=2 nem todos cabem no conjunto azul
+  // 4 parallel blocks: with k=2 not all of them fit in the blue set
   for (const n of ['p1', 'p2', 'p3', 'p4']) add(n, ['g']);
   const y = add('y', ['p1', 'p2', 'p3', 'p4']);
-  assert.equal(y.mergesetBlues.length, 3); // pai selecionado + 2
+  assert.equal(y.mergesetBlues.length, 3); // selected parent + 2
   assert.equal(y.mergesetReds.length, 1);
 });

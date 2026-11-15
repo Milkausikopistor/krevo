@@ -1,5 +1,5 @@
-<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Endereço privado · Explorador Krevo</title><style>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transaction 5732de0278…bbd812 · Krevo Explorer</title><style>
 :root{--bg:#f5f7fb;--panel:#fff;--text:#131826;--muted:#5f6b82;--line:#e2e6ef;--accent:#0f9d84;--blue:#3d6ff2;--red:#e0444f;--chip:#edf1f8;--edge:#c3cad8}
 @media (prefers-color-scheme:dark){:root{--bg:#0b0f19;--panel:#131a29;--text:#e7ebf4;--muted:#8d97ad;--line:#232c41;--accent:#2fd3ae;--blue:#5f8dff;--red:#ff6470;--chip:#1b2437;--edge:#3a4560}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -31,11 +31,20 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;p
 .big{font-size:28px;font-weight:700}
 footer{max-width:1200px;margin:0 auto;padding:0 16px 30px;color:var(--muted);font-size:12px}
 </style></head><body>
-<header><div class="bar"><a class="brand" href="/"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.7 5v10L12 22l-8.7-5V7z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="7.5" r="1.8" fill="currentColor"/><circle cx="7.5" cy="14.5" r="1.8" fill="currentColor"/><circle cx="16.5" cy="14.5" r="1.8" fill="currentColor"/><path d="M12 7.5l-4.5 7M12 7.5l4.5 7M7.5 14.5h9" stroke="currentColor" stroke-width="1.2"/></svg>Explorador Krevo</a><span class="net">devnet</span>
-<form class="search" action="/busca"><input name="q" placeholder="Buscar bloco, transação ou endereço" aria-label="Buscar"></form></div></header>
-<main><h1>Endereço privado</h1>
-<section class="panel"><p class="mono">krsdev1qypptwnlcpwkyexa3j9j4h2mfrmvas2r8y3f90qv7ak65594wmh647qzcz6z9ayes0z49jr3rx8vdhck2ren9a08qklctlfjfcn8xzq8h2cspg7hr4</p>
-<div class="note">🔒 <b>Não há nada para mostrar — e isso é a privacidade funcionando.</b><br>
-Pagamentos a endereços privados usam uma chave de uso único diferente a cada vez, com valor cifrado. Na rede não existe nenhum registro ligando estas saídas a este endereço; nem este explorador, nem o nó, nem ninguém consegue somar o saldo.<br>
-Para auditoria, o dono pode entregar a sua <b>chave de visualização</b> (krw1…) ou uma <b>prova de pagamento</b> (krp1…) de um pagamento específico.</div></section></main><footer>Krevo (KRV) · implementação de referência · as partes privadas das transações são invisíveis por projeto</footer>
+<header><div class="bar"><a class="brand" href="/"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.7 5v10L12 22l-8.7-5V7z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="7.5" r="1.8" fill="currentColor"/><circle cx="7.5" cy="14.5" r="1.8" fill="currentColor"/><circle cx="16.5" cy="14.5" r="1.8" fill="currentColor"/><path d="M12 7.5l-4.5 7M12 7.5l4.5 7M7.5 14.5h9" stroke="currentColor" stroke-width="1.2"/></svg>Krevo Explorer</a><span class="net">simnet</span>
+<form class="search" action="/search"><input name="q" placeholder="Search block, transaction, address or @name" aria-label="Search"></form></div></header>
+<main>
+<h1>Transaction <span class="mono">5732de0278b3b7c0…49bbd812</span> <span class="chip priv">Private</span></h1>
+<section class="panel"><table class="kv">
+<tr><td>Txid</td><td class="mono">5732de0278b3b7c0d57a77ee19a5101ef43abf6f8ca416e819c4f59649bbd812</td></tr>
+<tr><td>Status</td><td><span class="chip chain">accepted</span> <span class="muted">2 blue blocks on top</span></td></tr>
+<tr><td>Included in block</td><td><a class="mono" href="/block/f77c2b1ca4cf56faa9983f5d26fec05a142b327ffebc687d7d12015ed8d2477a">f77c2b1ca4…d2477a</a></td></tr>
+<tr><td>Accepted by chain block</td><td><a class="mono" href="/block/4f4e489becdd2d9a2e58e713970009115b054aa8fcb54502287ca794a5373512">4f4e489bec…373512</a></td></tr>
+<tr><td>Fee</td><td>0.00053452 KRV</td></tr>
+<tr><td>Size / mass</td><td>7,452 bytes / 53,452 g</td></tr>
+<tr><td>Memo</td><td><span class="chip priv">encrypted</span> <span class="muted">fixed size of 145 bytes — only the recipient reads it (you cannot even tell whether there is text)</span></td></tr>
+<tr><td>Range proof</td><td>Bulletproof of 754 bytes: proves that no hidden amount is negative (no hidden inflation)</td></tr>
+</table></section>
+<div class="cols"><section class="panel"><h2>Inputs</h2><table><tr><td><span class="chip priv">private input</span> <b>one</b> of the 21 private outputs that have ever existed is the one spent — nobody knows which<br><span class="muted">full-chain membership proof · key image</span> <span class="mono">0314435c4611…e4b8bc</span></td><td class="right muted">hidden</td></tr><tr><td><span class="chip priv">private input</span> <b>one</b> of the 21 private outputs that have ever existed is the one spent — nobody knows which<br><span class="muted">full-chain membership proof · key image</span> <span class="mono">024ae5a2abd2…dd23b0</span></td><td class="right muted">hidden</td></tr></table></section>
+<section class="panel"><h2>Outputs</h2><table><tr><td><span class="chip priv">private output</span> recipient and amount hidden<br><span class="muted">one-time key</span> <span class="mono">039cf5d55b22…50cb84</span></td><td class="right muted">hidden</td></tr><tr><td><span class="chip priv">private output</span> recipient and amount hidden<br><span class="muted">one-time key</span> <span class="mono">03013eacd00b…66ad72</span></td><td class="right muted">hidden</td></tr></table></section></div></main><footer>Krevo (KRV) · reference implementation · the private parts of transactions are invisible by design</footer>
 </body></html>

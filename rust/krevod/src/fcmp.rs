@@ -1,6 +1,6 @@
-//! Verificação das provas de pertencimento à cadeia inteira (FCMP) e a árvore de curvas.
-//! Espelha src/fcmp/{bp,circuit,tree,fcmp}.js — o circuito é remontado restrição por
-//! restrição na mesma ordem, porque os pesos z^q dependem da posição de cada restrição.
+//! Verification of full-chain membership proofs (FCMP) and the curve tree.
+//! Mirrors src/fcmp/{bp,circuit,tree,fcmp}.js — the circuit is rebuilt constraint by
+//! constraint in the same order, because the weights z^q depend on each constraint's position.
 
 use crate::crypto::{hash_point_for_key_image, hash_to_scalar, mul_g, Sc};
 use crate::ct::{ct_msm, ct_mul};
@@ -10,8 +10,8 @@ use crate::hash::H;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, OnceLock};
 
-// ====================================================================== geradores
-/// hashToPoint de src/fcmp/curve.js: H(domínio, nome da curva, partes…, u32le(ctr)).
+// ====================================================================== generators
+/// hashToPoint from src/fcmp/curve.js: H(domain, curve name, parts…, u32le(ctr)).
 fn hash_to_point_named<C: Curve>(domain: &str, f: impl Fn(H) -> H) -> Pt<C> {
     Pt::<C>::hash_to_point(|ctr| f(H::new(domain).s(C::NAME)).b(&ctr.to_le_bytes()).d32()).normalize()
 }
@@ -29,7 +29,7 @@ impl FcmpCurve for Secq {
     fn gens_cell() -> &'static OnceLock<Mutex<Gens<Self>>> { static C: OnceLock<Mutex<Gens<Secq>>> = OnceLock::new(); &C }
 }
 
-/// Geradores dos Bulletproofs de circuito (os n primeiros G e H, mais g, h, u).
+/// Generators of the circuit Bulletproofs (the first n G and H, plus g, h, u).
 pub fn gens<C: FcmpCurve>(n: usize) -> (Vec<Pt<C>>, Vec<Pt<C>>, Pt<C>, Pt<C>, Pt<C>) {
     let cell = C::gens_cell().get_or_init(|| Mutex::new(Gens { g: vec![], h: vec![], gb: gen::<C>("bp/g"), hb: gen::<C>("bp/h"), ub: gen::<C>("bp/u") }));
     let mut gs = cell.lock().unwrap();
@@ -45,7 +45,7 @@ pub fn gens<C: FcmpCurve>(n: usize) -> (Vec<Pt<C>>, Vec<Pt<C>>, Pt<C>, Pt<C>, Pt
 fn gen_at<C: FcmpCurve>(i: usize) -> Pt<C> { gens::<C>(i + 1).0[i] }
 fn h_base<C: FcmpCurve>() -> Pt<C> { gens::<C>(0).3 }
 
-// ====================================================================== transcrição
+// ====================================================================== transcript
 pub enum Tx<'a> { N(u64), S(&'a str), B(&'a [u8]) }
 pub struct Transcript([u8; 32]);
 impl Transcript {
@@ -76,7 +76,7 @@ impl Transcript {
     }
 }
 
-// ====================================================================== circuito
+// ====================================================================== circuit
 const BIG: i64 = 1 << 24;
 pub fn wire_l(i: usize) -> i64 { 3 * i as i64 }
 pub fn wire_r(i: usize) -> i64 { 3 * i as i64 + 1 }
@@ -110,8 +110,8 @@ impl<M: Modulus> Lc<M> {
 
 pub struct Gate<M: Modulus> { pub l: Lc<M>, pub r: Lc<M>, pub o: Lc<M> }
 
-/// Sistema de restrições. Em modo prova (`prover`) guarda também os valores das portas e as
-/// aberturas dos compromissos vetoriais; em modo verificação, só a estrutura.
+/// Constraint system. In prove mode (`prover`) it also keeps the gate values and the
+/// openings of the vector commitments; in verify mode, only the structure.
 pub struct Cs<M: Modulus> {
     pub n_gates: usize, pub cons: Vec<Lc<M>>, pub n_vcs: usize, pub n: usize,
     pub prover: bool, pub al: Vec<Fe<M>>, pub ar: Vec<Fe<M>>, pub ao: Vec<Fe<M>>,
@@ -123,7 +123,7 @@ impl<M: Modulus> Cs<M> {
     pub fn with_prover(prover: bool) -> Self {
         Cs { n_gates: 0, cons: vec![], n_vcs: 0, n: 0, prover, al: vec![], ar: vec![], ao: vec![], vc_vals: vec![], gammas: vec![] }
     }
-    /// Declara um compromisso vetorial (com abertura, para quem prova).
+    /// Declares a vector commitment (with its opening, for the prover).
     pub fn add_vc_with(&mut self, entries: HashMap<usize, Fe<M>>, gamma: Fe<M>) -> usize {
         self.vc_vals.push(entries);
         self.gammas.push(gamma);
@@ -146,7 +146,7 @@ impl<M: Modulus> Cs<M> {
         for (v, c) in &lc.t { s = s + *c * self.value(*v); }
         s
     }
-    /// Porta com entradas livres (testemunhas novas); os valores só importam para quem prova.
+    /// Gate with free inputs (new witnesses); the values only matter to the prover.
     pub fn mul_free_v(&mut self, va: Fe<M>, vb: Fe<M>) -> Gate<M> {
         let i = self.n_gates;
         self.n_gates += 1;
@@ -162,13 +162,13 @@ impl<M: Modulus> Cs<M> {
         g
     }
     pub fn constrain(&mut self, lc: Lc<M>) { if !lc.t.is_empty() || !lc.c.is_zero() { self.cons.push(lc); } }
-    /// Confere (quem prova) que todas as restrições valem.
+    /// Checks (prover) that all constraints hold.
     pub fn check(&self) -> Result<(), String> {
-        for (q, lc) in self.cons.iter().enumerate() { if !self.eval(lc).is_zero() { return Err(format!("restrição {q} não satisfeita")); } }
+        for (q, lc) in self.cons.iter().enumerate() { if !self.eval(lc).is_zero() { return Err(format!("constraint {q} not satisfied")); } }
         Ok(())
     }
 
-    /// Pesos com potências de z (z¹ … z^Q): wL, wR, wO, wC[k] (pos → peso), wc.
+    /// Weights with powers of z (z¹ … z^Q): wL, wR, wO, wC[k] (pos → weight), wc.
     pub fn weights(&self, z: Fe<M>, n: usize) -> (Vec<Fe<M>>, Vec<Fe<M>>, Vec<Fe<M>>, Vec<HashMap<usize, Fe<M>>>, Fe<M>) {
         let mut wl = vec![Fe::ZERO; n];
         let mut wr = vec![Fe::ZERO; n];
@@ -229,7 +229,7 @@ fn select8<M: Modulus>(win: &[Lc<M>; 7], t: &[Fe<M>; 8]) -> Lc<M> {
 }
 struct LcPt<M: Modulus> { x: Lc<M>, y: Lc<M> }
 type Val<M> = (Fe<M>, Fe<M>);
-/// Soma incompleta A + S (3 portas). `vals` = valores (A, S) para quem prova; devolve os de A + S.
+/// Incomplete addition A + S (3 gates). `vals` = values (A, S) for the prover; returns those of A + S.
 fn add_gadget<M: Modulus>(cs: &mut Cs<M>, a: &LcPt<M>, s: &LcPt<M>, vals: Option<(Val<M>, Val<M>)>) -> (LcPt<M>, Option<Val<M>>) {
     let (lam, dx, v3) = match vals {
         Some(((xa, ya), (xs, ys))) => {
@@ -254,7 +254,7 @@ fn add_gadget<M: Modulus>(cs: &mut Cs<M>, a: &LcPt<M>, s: &LcPt<M>, vals: Option
 pub const W: usize = 86;
 pub struct Table<M: Modulus> { tbl: Vec<[(Fe<M>, Fe<M>); 8]>, offset: (Fe<M>, Fe<M>) }
 
-/// T_j[d] = d·8^j·B + 2^j·Ω ; offset = (2^W − 1)·Ω.  (PC: curva dos pontos; campo = circuito.)
+/// T_j[d] = d·8^j·B + 2^j·Ω ; offset = (2^W − 1)·Ω.  (PC: the points' curve; field = circuit.)
 fn fixed_base_table<PC: Curve>(b: &Pt<PC>, omega: &Pt<PC>) -> Table<PC::F> {
     let mut js = Vec::with_capacity(8 * W);
     let (mut bj, mut oj) = (*b, *omega);
@@ -268,7 +268,7 @@ fn fixed_base_table<PC: Curve>(b: &Pt<PC>, omega: &Pt<PC>) -> Table<PC::F> {
     let aff = batch_affine(&js);
     let tbl = (0..W).map(|j| {
         let mut row = [(Fe::ZERO, Fe::ZERO); 8];
-        for d in 0..8 { row[d] = aff[8 * j + d].expect("tabela de base fixa degenerada"); }
+        for d in 0..8 { row[d] = aff[8 * j + d].expect("degenerate fixed-base table"); }
         row
     }).collect();
     // (2^W − 1)·Ω
@@ -278,7 +278,7 @@ fn fixed_base_table<PC: Curve>(b: &Pt<PC>, omega: &Pt<PC>) -> Table<PC::F> {
     Table { tbl, offset: off.affine().unwrap() }
 }
 
-/// Consulta da tabela da janela sem acesso dependente do dígito secreto.
+/// Window table lookup without access that depends on the secret digit.
 fn lookup8<M: Modulus>(row: &[(Fe<M>, Fe<M>); 8], d: usize) -> (Fe<M>, Fe<M>) {
     let mut r = (Fe::ZERO, Fe::ZERO);
     for (i, e) in row.iter().enumerate() {
@@ -288,7 +288,7 @@ fn lookup8<M: Modulus>(row: &[(Fe<M>, Fe<M>); 8], d: usize) -> (Fe<M>, Fe<M>) {
     r
 }
 
-/// C = Ĉ − r·B com os bits de r no circuito. `r` só importa para quem prova (valores).
+/// C = Ĉ − r·B with the bits of r in the circuit. `r` only matters to the prover (values).
 fn unblind_gadget<PC: Curve>(cs: &mut Cs<PC::F>, wins: &[[Lc<PC::F>; 7]], table: &Table<PC::F>, chat: &Pt<PC>, r: &[u64; 4]) -> Result<(LcPt<PC::F>, Option<Val<PC::F>>), String> {
     let col = |j: usize, which: usize| -> [Fe<PC::F>; 8] { let mut r = [Fe::ZERO; 8]; for d in 0..8 { r[d] = if which == 0 { table.tbl[j][d].0 } else { table.tbl[j][d].1 }; } r };
     let pv = cs.prover;
@@ -302,12 +302,12 @@ fn unblind_gadget<PC: Curve>(cs: &mut Cs<PC::F>, wins: &[[Lc<PC::F>; 7]], table:
         a = na;
         va = nv;
     }
-    let k = chat.add_aff(&table.offset.0, &table.offset.1).affine().ok_or("ponto público degenerado")?;
+    let k = chat.add_aff(&table.offset.0, &table.offset.1).affine().ok_or("degenerate public point")?;
     let kl = LcPt { x: Lc::k(k.0), y: Lc::k(k.1) };
     let neg_a = LcPt { x: a.x.clone(), y: a.y.scale(-Fe::ONE) };
     let vneg = va.map(|(x, y)| (x, -y));
     let gi = match vneg {
-        Some((xn, _)) => { let d = xn - k.0; if d.is_zero() { return Err("soma excepcional".into()); } cs.mul_free_v(d.invert(), d) }
+        Some((xn, _)) => { let d = xn - k.0; if d.is_zero() { return Err("exceptional addition".into()); } cs.mul_free_v(d.invert(), d) }
         None => cs.mul_free(),
     };
     cs.constrain(gi.r.sub(&neg_a.x.sub(&kl.x)));
@@ -315,7 +315,7 @@ fn unblind_gadget<PC: Curve>(cs: &mut Cs<PC::F>, wins: &[[Lc<PC::F>; 7]], table:
     Ok(add_gadget(cs, &kl, &neg_a, vneg.map(|v| (k, v))))
 }
 fn permissible_gadget<M: Modulus>(cs: &mut Cs<M>, y: &Lc<M>, yv: Option<Fe<M>>) -> Result<(), String> {
-    let w = match yv { Some(y) => (y + Fe::ONE).sqrt_ct().ok_or("ponto não permissível")?, None => Fe::ZERO };
+    let w = match yv { Some(y) => (y + Fe::ONE).sqrt_ct().ok_or("point not permissible")?, None => Fe::ZERO };
     let g = cs.mul_free_v(w, w);
     cs.constrain(g.r.sub(&g.l));
     cs.constrain(g.o.sub(&y.plus(Fe::ONE)));
@@ -328,7 +328,7 @@ fn select_gadget<M: Modulus>(cs: &mut Cs<M>, entries: &[Lc<M>], x: &Lc<M>) {
     cs.constrain(acc);
 }
 
-// ====================================================================== árvore
+// ====================================================================== tree
 pub const LEAF_WIDTH: usize = 6;
 pub const LEAF_BLIND: usize = 6;
 
@@ -355,14 +355,14 @@ pub fn make_permissible<C: Curve>(raw: &Pt<C>, h: &Pt<C>) -> (u64, Pt<C>) {
         if is_permissible(&pt) { return (k, pt.normalize()); }
         pt = pt.add(h);
     }
-    panic!("nenhum deslocamento permissível");
+    panic!("no permissible offset");
 }
 
 fn leaf_tables() -> &'static Vec<FixedBase<Secq>> {
     static T: OnceLock<Vec<FixedBase<Secq>>> = OnceLock::new();
     T.get_or_init(|| gens::<Secq>(LEAF_BLIND + 1).0[..LEAF_WIDTH].iter().map(FixedBase::new).collect())
 }
-/// Folha de uma saída: coordenadas (P, I = Hp(P), C), ponto permissível e deslocamento k.
+/// Leaf of an output: coordinates (P, I = Hp(P), C), permissible point and offset k.
 pub struct LeafData { pub p: P1, pub i: P1, pub c: P1, pub coords: [Fe<ModP>; 6], pub k: u64, pub point: P2, pub x: [u64; 4] }
 
 pub fn leaf_data(p: &[u8; 33], c: &[u8; 33]) -> Option<LeafData> {
@@ -381,8 +381,8 @@ pub fn leaf_data(p: &[u8; 33], c: &[u8; 33]) -> Option<LeafData> {
     Some(LeafData { p: pp, i: ii, c: cc, coords, k, point: pt, x })
 }
 
-/// x da folha permissível de uma saída (P, C em bytes), como inteiro (escalar de E1).
-pub fn leaf_x(p: &[u8; 33], c: &[u8; 33]) -> [u64; 4] { leaf_data(p, c).expect("saída privada inválida").x }
+/// x of an output's permissible leaf (P, C as bytes), as an integer (a scalar of E1).
+pub fn leaf_x(p: &[u8; 33], c: &[u8; 33]) -> [u64; 4] { leaf_data(p, c).expect("invalid private output").x }
 
 #[derive(Clone)]
 pub enum NodePt { E1(P1), E2(P2) }
@@ -391,7 +391,7 @@ pub struct NodeRec { pub entries: Vec<[u64; 4]>, pub raw: NodePt, pub x: [u64; 4
 #[derive(Clone)]
 pub struct Root { pub depth: u32, pub point: NodePt, pub count: usize }
 
-/// Árvore sobre as saídas privadas na ordem global (as folhas vêm de fora, sob demanda).
+/// Tree over the private outputs in global order (the leaves come from outside, on demand).
 pub struct CurveTree {
     pub branch: usize,
     cache: HashMap<(u32, u64), NodeRec>,
@@ -453,14 +453,14 @@ impl CurveTree {
     pub fn root(&mut self, leaf: &dyn Fn(u64) -> ([u8; 32], [u8; 33], [u8; 33]), n: u64) -> Root {
         if let Some(r) = self.roots.get(&n) { return r.clone(); }
         let depth = depth_for(n, self.branch);
-        let rec = self.node_at(leaf, depth, 0, n).expect("raiz");
+        let rec = self.node_at(leaf, depth, 0, n).expect("root");
         let r = Root { depth, point: rec.raw, count: rec.entries.len() };
         if self.roots.len() > 10_000 { self.roots.clear(); }
         self.roots.insert(n, r.clone());
         r
     }
 
-    /// Entradas de cada nó do caminho do pedaço `chunk`, do nível 1 até a raiz.
+    /// Entries of each node on the path of chunk `chunk`, from level 1 up to the root.
     pub fn path_for_chunk(&mut self, leaf: &dyn Fn(u64) -> ([u8; 32], [u8; 33], [u8; 33]), n: u64, chunk: u64) -> Option<Vec<(u32, u64, Vec<[u64; 4]>)>> {
         let d = depth_for(n, self.branch);
         let mut out = vec![];
@@ -486,7 +486,7 @@ impl CurveTree {
     }
 }
 
-// ====================================================================== Bulletproofs (verificação)
+// ====================================================================== Bulletproofs (verification)
 pub fn t_powers(k: usize) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
     let mut lp = vec![1i64, 2, 3];
     let mut rp = vec![0i64, 1, 3];
@@ -538,13 +538,13 @@ fn xpow<M: Modulus>(x: Fe<M>, e: i64) -> Fe<M> {
     base.pow_limbs(&[e.unsigned_abs(), 0, 0, 0])
 }
 
-/// Acrescenta ao lote as equações de uma prova (cs = o circuito em modo verificação).
+/// Adds a proof's equations to the batch (cs = the circuit in verify mode).
 fn bp_verify_into<C: FcmpCurve>(batch: &mut BpBatch<C>, cs: &Cs<C::S>, vcs: &[Pt<C>], pf: &BpProof<C>, tr: &mut Transcript) -> Result<(), String> {
     let n = cs.n;
     let rounds = n.trailing_zeros() as usize;
     let k = vcs.len();
     let (_, _, tpow) = t_powers(k);
-    if pf.t.len() != tpow.len() || pf.l.len() != rounds { return Err("bp: prova com tamanho errado".into()); }
+    if pf.t.len() != tpow.len() || pf.l.len() != rounds { return Err("bp: proof with the wrong size".into()); }
     tr.add("AI", &[Tx::B(&pf.ai.to_bytes())]);
     tr.add("AO", &[Tx::B(&pf.ao.to_bytes())]);
     tr.add("S", &[Tx::B(&pf.s.to_bytes())]);
@@ -569,7 +569,7 @@ fn bp_verify_into<C: FcmpCurve>(batch: &mut BpBatch<C>, cs: &Cs<C::S>, vcs: &[Pt
     for i in 1..n { yp[i] = yp[i - 1] * y; yi[i] = yi[i - 1] * yinv; }
     let mut delta = Fe::ZERO;
     for i in 0..n { if !wr[i].is_zero() && !wl[i].is_zero() { delta = delta + yi[i] * wr[i] * wl[i]; } }
-    // pesos do lote: acaso + hash da própria prova (com gerador quebrado, ainda imprevisíveis)
+    // batch weights: randomness + hash of the proof itself (still unpredictable with a broken generator)
     let c1 = Fe::random() + tr.ch::<C::S>("batch/c1");
     let c2 = Fe::random() + tr.ch::<C::S>("batch/c2");
     batch.grow(n);
@@ -678,10 +678,10 @@ fn select_in_parent<M: Modulus>(cs: &mut Cs<M>, st: &Statement, parent_level: u3
     select_gadget(cs, &entries, x);
 }
 
-/// Testemunha de quem prova: cegamentos, coordenadas da folha e entradas de cada nó do caminho.
+/// Prover's witness: blindings, leaf coordinates and the entries of each node on the path.
 pub struct Witness { pub r1: Fe<ModN>, pub r2: Fe<ModP>, pub coords: [Fe<ModP>; 6], pub k_l: u64, pub levels: HashMap<u32, (Vec<[u64; 4]>, u64)> }
 
-/// Compromisso vetorial de um nó do caminho (com a abertura, se houver testemunha).
+/// Vector commitment of a node on the path (with the opening, if there is a witness).
 fn add_node_vc<M: Modulus>(cs: &mut Cs<M>, st: &Statement, w: Option<&Witness>, l: u32) -> usize {
     let Some(w) = w else { return cs.add_vc() };
     let seg = segment(l as usize, st.b);
@@ -693,7 +693,7 @@ fn add_node_vc<M: Modulus>(cs: &mut Cs<M>, st: &Statement, w: Option<&Witness>, 
     cs.add_vc_with(e, Fe::from_u64(*k))
 }
 
-/// Circuito sobre E2 (campo F_p): desceguem-se pontos de E1 com r1. Devolve (cs, compromissos).
+/// Circuit over E2 (field F_p): points of E1 are unblinded with r1. Returns (cs, commitments).
 fn build_e2(st: &Statement, w: Option<&Witness>) -> Result<(Cs<ModP>, Vec<P2>), String> {
     let bs = bases();
     let mut cs = Cs::<ModP>::with_prover(w.is_some());
@@ -710,7 +710,7 @@ fn build_e2(st: &Statement, w: Option<&Witness>) -> Result<(Cs<ModP>, Vec<P2>), 
     let mut vc_of = HashMap::new();
     let mut l = 2;
     while l <= st.d {
-        let p = if l == st.d { match &st.root { NodePt::E2(p) => *p, _ => return Err("raiz na curva errada".into()) } } else { st.hats2[&l] };
+        let p = if l == st.d { match &st.root { NodePt::E2(p) => *p, _ => return Err("root on the wrong curve".into()) } } else { st.hats2[&l] };
         vc_of.insert(l, add_node_vc(&mut cs, st, w, l)); vcs.push(p);
         l += 2;
     }
@@ -734,14 +734,14 @@ fn build_e2(st: &Statement, w: Option<&Witness>) -> Result<(Cs<ModP>, Vec<P2>), 
     Ok((cs, vcs))
 }
 
-/// Circuito sobre E1 (campo F_n): desceguem-se a folha e os nós de E2 com r2.
+/// Circuit over E1 (field F_n): the leaf and the E2 nodes are unblinded with r2.
 fn build_e1(st: &Statement, w: Option<&Witness>) -> Result<(Cs<ModN>, Vec<P1>), String> {
     let mut cs = Cs::<ModN>::with_prover(w.is_some());
     let mut vcs = vec![];
     let mut vc_of = HashMap::new();
     let mut l = 1;
     while l <= st.d {
-        let p = if l == st.d { match &st.root { NodePt::E1(p) => *p, _ => return Err("raiz na curva errada".into()) } } else { st.hats1[&l] };
+        let p = if l == st.d { match &st.root { NodePt::E1(p) => *p, _ => return Err("root on the wrong curve".into()) } } else { st.hats1[&l] };
         vc_of.insert(l, add_node_vc(&mut cs, st, w, l)); vcs.push(p);
         l += 2;
     }
@@ -782,14 +782,14 @@ impl FcmpBatch {
     pub fn check(&self) -> bool { self.e1.check() && self.e2.check() }
 }
 
-/// Confere a prova de uma entrada e acrescenta as equações dos Bulletproofs ao lote.
+/// Checks an input's proof and adds the Bulletproofs equations to the batch.
 pub fn fcmp_verify_into(batch: &mut FcmpBatch, branch: usize, n: u64, root: &Root, proof: &[u8], key_image: &P1, pseudo: &P1, msg: &[u8]) -> Result<(), String> {
     let d = depth_for(n, branch);
     let sizes = circuit_sizes(d, branch);
-    if proof.len() != fcmp_proof_size(n, branch) { return Err("fcmp: tamanho da prova".into()); }
-    if key_image.is_inf() { return Err("fcmp: imagem de chave inválida".into()); }
+    if proof.len() != fcmp_proof_size(n, branch) { return Err("fcmp: proof size".into()); }
+    if key_image.is_inf() { return Err("fcmp: invalid key image".into()); }
     let mut o = 0usize;
-    let bad = || "ponto inválido".to_string();
+    let bad = || "invalid point".to_string();
     let e1 = |o: &mut usize| -> Result<P1, String> { let p = P1::from_bytes(&proof[*o..*o + 33]).ok_or_else(bad); *o += 33; p };
     let phat = e1(&mut o)?; let ihat = e1(&mut o)?; let chat = e1(&mut o)?;
     let lhat = P2::from_bytes(&proof[o..o + 33]).ok_or_else(bad)?; o += 33;
@@ -799,26 +799,26 @@ pub fn fcmp_verify_into(batch: &mut FcmpBatch, branch: usize, n: u64, root: &Roo
     }
     let head_len = o;
     let (s1, s2) = (bp_proof_size(sizes.n1, sizes.k1), bp_proof_size(sizes.n2, sizes.k2));
-    let pr1 = decode_bp::<Secp>(&proof[o..o + s1], sizes.n1, sizes.k1).ok_or("bp: prova malformada")?; o += s1;
-    let pr2 = decode_bp::<Secq>(&proof[o..o + s2], sizes.n2, sizes.k2).ok_or("bp: prova malformada")?; o += s2;
+    let pr1 = decode_bp::<Secp>(&proof[o..o + s1], sizes.n1, sizes.k1).ok_or("bp: malformed proof")?; o += s1;
+    let pr2 = decode_bp::<Secq>(&proof[o..o + s2], sizes.n2, sizes.k2).ok_or("bp: malformed proof")?; o += s2;
     let gsp = &proof[o..];
     let dpt = chat.sub(pseudo);
     let ctx = H::new("fcmp/ctx").b(msg).b(&proof[..head_len]).b(&proof[head_len..head_len + s1 + s2]).b(&pseudo.to_bytes()).b(&key_image.to_bytes()).d32();
-    if !gsp_verify(&ctx, &phat, &ihat, &dpt, key_image, gsp) { return Err("fcmp: prova de posse/imagem de chave inválida".into()); }
+    if !gsp_verify(&ctx, &phat, &ihat, &dpt, key_image, gsp) { return Err("fcmp: invalid ownership/key image proof".into()); }
     let st = Statement { b: branch, n, d, root: root.point.clone(), root_count: root.count, phat, ihat, chat, lhat, hats1, hats2 };
     let (mut cs2, vcs2) = build_e2(&st, None)?;
     cs2.n = sizes.n2;
     let (mut cs1, vcs1) = build_e1(&st, None)?;
     cs1.n = sizes.n1;
-    if cs2.n_gates > cs2.n || cs1.n_gates > cs1.n { return Err("fcmp: circuito maior que o previsto".into()); }
+    if cs2.n_gates > cs2.n || cs1.n_gates > cs1.n { return Err("fcmp: circuit larger than expected".into()); }
     bp_verify_into(&mut batch.e2, &cs2, &vcs2, &pr2, &mut transcript_for("E2", &st))?;
     bp_verify_into(&mut batch.e1, &cs1, &vcs1, &pr1, &mut transcript_for("E1", &st))?;
     Ok(())
 }
 
-// ====================================================================== PROVADOR
-/// Trabalho de prova de UMA entrada (vem da carteira JavaScript): o caminho na árvore, a saída
-/// e os cegamentos já escolhidos (r1, r2) — a carteira usa os mesmos no enunciado e na GSP.
+// ====================================================================== PROVER
+/// Proving job for ONE input (it comes from the JavaScript wallet): the path in the tree, the output
+/// and the already chosen blindings (r1, r2) — the wallet uses the same ones in the statement and in the GSP.
 pub struct ProveJob {
     pub branch: usize,
     pub n: u64,
@@ -830,13 +830,13 @@ pub struct ProveJob {
     pub r2: Fe<ModP>,
 }
 
-/// Enunciado público + testemunha (espelha setup() de src/fcmp/fcmp.js).
+/// Public statement + witness (mirrors setup() from src/fcmp/fcmp.js).
 fn setup(job: &ProveJob) -> Result<(Statement, Witness), String> {
     let b = job.branch;
     let d = depth_for(job.n, b);
-    if job.path.len() != d as usize { return Err("fcmp: caminho com profundidade errada".into()); }
-    let leaf = leaf_data(&job.p, &job.c).ok_or("fcmp: saída inválida")?;
-    if job.path[0].2.get(job.leaf_pos) != Some(&leaf.x) { return Err("fcmp: a saída não está nessa posição da árvore".into()); }
+    if job.path.len() != d as usize { return Err("fcmp: path with the wrong depth".into()); }
+    let leaf = leaf_data(&job.p, &job.c).ok_or("fcmp: invalid output")?;
+    if job.path[0].2.get(job.leaf_pos) != Some(&leaf.x) { return Err("fcmp: the output is not at that position in the tree".into()); }
     let mut levels: HashMap<u32, (Vec<[u64; 4]>, u64)> = HashMap::new();
     let mut points1: HashMap<u32, P1> = HashMap::new();
     let mut points2: HashMap<u32, P2> = HashMap::new();
@@ -845,7 +845,7 @@ fn setup(job: &ProveJob) -> Result<(Statement, Witness), String> {
     for l in 1..=d {
         let entries = &job.path[l as usize - 1].2;
         let pos = if l == 1 { job.leaf_pos } else { (job.path[l as usize - 2].1 % b as u64) as usize };
-        if entries.get(pos) != Some(&child_x) { return Err(format!("fcmp: caminho inconsistente no nível {l}")); }
+        if entries.get(pos) != Some(&child_x) { return Err(format!("fcmp: inconsistent path at level {l}")); }
         let seg = segment(l as usize, b);
         let k;
         if seg.odd {
@@ -854,7 +854,7 @@ fn setup(job: &ProveJob) -> Result<(Statement, Witness), String> {
             let raw = msm(&ks, &g[seg.off..seg.off + entries.len()]);
             let (kk, pt) = if l < d { make_permissible(&raw, &hb) } else { (0, raw) };
             k = kk;
-            child_x = pt.affine().ok_or("nó degenerado")?.0.to_limbs();
+            child_x = pt.affine().ok_or("degenerate node")?.0.to_limbs();
             if l == d { root = Some(NodePt::E1(raw)); } else { points1.insert(l, pt); }
         } else {
             let (g, _, _, hb, _) = gens::<Secq>(seg.blind + 1);
@@ -862,7 +862,7 @@ fn setup(job: &ProveJob) -> Result<(Statement, Witness), String> {
             let raw = msm(&ks, &g[seg.off..seg.off + entries.len()]);
             let (kk, pt) = if l < d { make_permissible(&raw, &hb) } else { (0, raw) };
             k = kk;
-            child_x = pt.affine().ok_or("nó degenerado")?.0.to_limbs();
+            child_x = pt.affine().ok_or("degenerate node")?.0.to_limbs();
             if l == d { root = Some(NodePt::E2(raw)); } else { points2.insert(l, pt); }
         }
         levels.insert(l, (entries.clone(), k));
@@ -873,7 +873,7 @@ fn setup(job: &ProveJob) -> Result<(Statement, Witness), String> {
     let mut hats2 = HashMap::new();
     for l in 1..d {
         let seg = segment(l as usize, b);
-        // r1 e r2 são segredos (revelariam a moeda gasta): multiplicações em tempo constante
+        // r1 and r2 are secrets (they would reveal the spent coin): constant-time multiplications
         if seg.odd { hats1.insert(l, points1[&l].add(&ct_mul(&gen_at::<Secp>(seg.blind), &r1))); }
         else { hats2.insert(l, points2[&l].add(&ct_mul(&gen_at::<Secq>(seg.blind), &r2))); }
     }
@@ -885,8 +885,8 @@ fn setup(job: &ProveJob) -> Result<(Statement, Witness), String> {
     Ok((st, Witness { r1, r2, coords: leaf.coords, k_l: leaf.k, levels }))
 }
 
-/// Produto interno SEM pular zeros: os vetores do provador carregam a testemunha (bits dos
-/// cegamentos, posição na árvore) e pular os zeros deixava o tempo depender dela.
+/// Inner product WITHOUT skipping zeros: the prover's vectors carry the witness (bits of the
+/// blindings, position in the tree) and skipping the zeros made the timing depend on it.
 fn inner<M: Modulus>(a: &[Fe<M>], b: &[Fe<M>]) -> Fe<M> {
     let mut s = Fe::ZERO;
     for i in 0..a.len() { s = s + a[i] * b[i]; }
@@ -897,21 +897,21 @@ fn to_points<C: Curve>(v: Vec<Pt<C>>) -> Vec<Pt<C>> {
     batch_affine(&v).into_iter().map(|p| p.map(|(x, y)| Pt::from_affine(x, y)).unwrap_or_else(Pt::inf)).collect()
 }
 
-/// Bulletproofs de circuito com compromissos vetoriais (espelha bpProve de src/fcmp/bp.js).
+/// Circuit Bulletproofs with vector commitments (mirrors bpProve from src/fcmp/bp.js).
 fn bp_prove<C: FcmpCurve>(cs: &Cs<C::S>, tr: &mut Transcript) -> Result<BpProof<C>, String> {
     let n = cs.n;
     let k = cs.n_vcs;
-    if cs.n_gates > n { return Err("bp: portas demais para n".into()); }
+    if cs.n_gates > n { return Err("bp: too many gates for n".into()); }
     cs.check()?;
     let (g, h, gb, hb, ub) = gens::<C>(n);
     let pad = |a: &Vec<Scalar<C>>| { let mut r = vec![Fe::ZERO; n]; r[..a.len()].copy_from_slice(a); r };
     let (al, ar, ao) = (pad(&cs.al), pad(&cs.ar), pad(&cs.ao));
-    // Nonces "hedged": semente = H(testemunha ‖ 32 bytes aleatórios). Com o gerador aleatório
-    // quebrado, os cegamentos continuam imprevisíveis (dependem da testemunha secreta).
+    // "Hedged" nonces: seed = H(witness ‖ 32 random bytes). With a broken random
+    // generator, the blindings stay unpredictable (they depend on the secret witness).
     let mut sh = H::new("fcmp/bp/seed");
     for v in cs.al.iter().chain(&cs.ar).chain(&cs.gammas) { sh = sh.b(&v.to_be_bytes()); }
     let mut rnd = [0u8; 32];
-    getrandom::fill(&mut rnd).map_err(|_| "aleatoriedade indisponível")?;
+    getrandom::fill(&mut rnd).map_err(|_| "randomness unavailable")?;
     let seed = sh.b(&rnd).d32();
     let nonce = |tag: &str, i: usize| -> Scalar<C> { Fe::from_be_bytes_wide(&H::new("fcmp/bp/nonce").b(&seed).s(tag).n(i as u64).d64()) };
     let (alpha, beta, rho) = (nonce("alpha", 0), nonce("beta", 0), nonce("rho", 0));
@@ -920,7 +920,7 @@ fn bp_prove<C: FcmpCurve>(cs: &Cs<C::S>, tr: &mut Transcript) -> Result<BpProof<
     let cat = |x: Scalar<C>, a: &[Scalar<C>], b: &[Scalar<C>]| { let mut v = vec![x]; v.extend_from_slice(a); v.extend_from_slice(b); v };
     let mut gh = vec![hb]; gh.extend_from_slice(&g); gh.extend_from_slice(&h);
     let mut g1 = vec![hb]; g1.extend_from_slice(&g);
-    // aL, aR, aO carregam a testemunha (bits de r, posição no caminho): compromissos em tempo constante
+    // aL, aR, aO carry the witness (bits of r, position on the path): constant-time commitments
     let ai = ct_msm(&cat(alpha, &al, &ar), &gh);
     let ao_pt = ct_msm(&cat(beta, &ao, &[]), &g1);
     let s = msm(&cat(rho, &sl, &sr), &gh);
@@ -945,9 +945,9 @@ fn bp_prove<C: FcmpCurve>(cs: &Cs<C::S>, tr: &mut Transcript) -> Result<BpProof<
     rv.insert(3, (0..n).map(|i| yp[i] * sr[i]).collect());
     for j in 0..k {
         let mut c = vec![Fe::ZERO; n];
-        for (pos, v) in &cs.vc_vals[j] { if *pos >= n { return Err("bp: compromisso fora do tamanho".into()); } c[*pos] = *v; }
+        for (pos, v) in &cs.vc_vals[j] { if *pos >= n { return Err("bp: commitment out of range".into()); } c[*pos] = *v; }
         let mut wv = vec![Fe::ZERO; n];
-        for (pos, v) in &wcm[j] { if *pos >= n { return Err("bp: restrição fora do tamanho".into()); } wv[*pos] = *v; }
+        for (pos, v) in &wcm[j] { if *pos >= n { return Err("bp: constraint out of range".into()); } wv[*pos] = *v; }
         lv.insert(4 + j as i64, c);
         rv.insert(-2 - j as i64, wv);
     }
@@ -955,7 +955,7 @@ fn bp_prove<C: FcmpCurve>(cs: &Cs<C::S>, tr: &mut Transcript) -> Result<BpProof<
     for i in &lp { for jj in &rp { let e = t.entry(i + jj).or_insert(Fe::ZERO); *e = *e + inner(&lv[i], &rv[jj]); } }
     let mut delta = Fe::ZERO;
     for i in 0..n { if !wr[i].is_zero() && !wl[i].is_zero() { delta = delta + yi[i] * wr[i] * wl[i]; } }
-    if t[&2] != wc + delta { return Err("bp: t2 não confere (circuito inconsistente)".into()); }
+    if t[&2] != wc + delta { return Err("bp: t2 does not match (inconsistent circuit)".into()); }
     let mut tau: HashMap<i64, Scalar<C>> = HashMap::new();
     let mut ts = vec![];
     for e in &tpow {
@@ -968,7 +968,7 @@ fn bp_prove<C: FcmpCurve>(cs: &Cs<C::S>, tr: &mut Transcript) -> Result<BpProof<
     let x: Scalar<C> = tr.ch("x");
     let mut l = vec![Fe::ZERO; n];
     let mut r = vec![Fe::ZERO; n];
-    // sem desvios em valores da testemunha
+    // no branching on witness values
     for (e, v) in &lv { let xe = xpow(x, *e); for i in 0..n { l[i] = l[i] + v[i] * xe; } }
     for (e, v) in &rv { let xe = xpow(x, *e); for i in 0..n { r[i] = r[i] + v[i] * xe; } }
     let that = inner(&l, &r);
@@ -981,7 +981,7 @@ fn bp_prove<C: FcmpCurve>(cs: &Cs<C::S>, tr: &mut Transcript) -> Result<BpProof<
     tr.add("that", &[Tx::B(&that.to_be_bytes())]);
     let w: Scalar<C> = tr.ch("w");
     let q = ub.mul(&w);
-    // argumento de produto interno; H'_i = y^-i·H_i guardado como peso cw_i
+    // inner-product argument; H'_i = y^-i·H_i kept as the weight cw_i
     let (mut a, mut b) = (l, r);
     let (mut gv, mut hv, mut cw) = (g, h, yi);
     let (mut ls, mut rs) = (vec![], vec![]);
@@ -1033,7 +1033,7 @@ fn encode_bp<C: Curve>(p: &BpProof<C>) -> Vec<u8> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Half { E1, E2 }
 
-/// Uma das duas provas Bulletproofs de uma entrada, já codificada (a mesma de proveHalf no JS).
+/// One of an input's two Bulletproofs, already encoded (the same as proveHalf in JS).
 pub fn prove_half(job: &ProveJob, half: Half) -> Result<Vec<u8>, String> {
     let (st, w) = setup(job)?;
     let sizes = circuit_sizes(st.d, st.b);
@@ -1051,12 +1051,12 @@ pub fn prove_half(job: &ProveJob, half: Half) -> Result<Vec<u8>, String> {
     }
 }
 
-/// Confere as duas metades produzidas para um trabalho (autoverificação do provador).
+/// Checks the two halves produced for a job (the prover's self-check).
 pub fn verify_halves(job: &ProveJob, e1: &[u8], e2: &[u8]) -> Result<bool, String> {
     let (st, _) = setup(job)?;
     let sizes = circuit_sizes(st.d, st.b);
-    let pr1 = decode_bp::<Secp>(e1, sizes.n1, sizes.k1).ok_or("metade E1 malformada")?;
-    let pr2 = decode_bp::<Secq>(e2, sizes.n2, sizes.k2).ok_or("metade E2 malformada")?;
+    let pr1 = decode_bp::<Secp>(e1, sizes.n1, sizes.k1).ok_or("malformed E1 half")?;
+    let pr2 = decode_bp::<Secq>(e2, sizes.n2, sizes.k2).ok_or("malformed E2 half")?;
     let (mut cs2, vcs2) = build_e2(&st, None)?;
     cs2.n = sizes.n2;
     let (mut cs1, vcs1) = build_e1(&st, None)?;
@@ -1067,7 +1067,7 @@ pub fn verify_halves(job: &ProveJob, e1: &[u8], e2: &[u8]) -> Result<bool, Strin
     Ok(batch.check())
 }
 
-/// Cabeçalho da prova (P̂, Î, Ĉ, L̂ e os nós cegados do caminho), igual ao encodeHead do JS.
+/// Proof header (P̂, Î, Ĉ, L̂ and the blinded nodes of the path), equal to JS's encodeHead.
 pub fn head_bytes(job: &ProveJob) -> Result<Vec<u8>, String> {
     let (st, _) = setup(job)?;
     let mut v = vec![];
@@ -1077,7 +1077,7 @@ pub fn head_bytes(job: &ProveJob) -> Result<Vec<u8>, String> {
     Ok(v)
 }
 
-/// Enunciado de quem prova: cabeçalho, P̂, Î, Ĉ e a raiz (para a autoverificação).
+/// Prover's statement: header, P̂, Î, Ĉ and the root (for the self-check).
 pub fn prover_statement(job: &ProveJob) -> Result<(Vec<u8>, P1, P1, P1, Root), String> {
     let head = head_bytes(job)?;
     let (st, _) = setup(job)?;
@@ -1085,8 +1085,8 @@ pub fn prover_statement(job: &ProveJob) -> Result<(Vec<u8>, P1, P1, P1, Root), S
     Ok((head, st.phat, st.ihat, st.chat, root))
 }
 
-/// Prova de Schnorr generalizada da FCMP (espelha gspProve do JS) com nonces "hedged" e todas as
-/// multiplicações por segredos em tempo constante. w = [p, t, q, y, a, b].
+/// FCMP generalized Schnorr proof (mirrors gspProve from JS) with "hedged" nonces and all
+/// multiplications by secrets in constant time. w = [p, t, q, y, a, b].
 pub fn gsp_prove(ctx: &[u8; 32], phat: &P1, ihat: &P1, d: &P1, w: [Sc; 6]) -> Result<Vec<u8>, String> {
     use crate::wallet_ops::{hedged, mul_g_ct};
     let bs = bases();
@@ -1100,7 +1100,7 @@ pub fn gsp_prove(ctx: &[u8; 32], phat: &P1, ihat: &P1, d: &P1, w: [Sc; 6]) -> Re
     let mut out = e.to_be_bytes().to_vec();
     for i in 0..6 { out.extend_from_slice(&(k[i] + e * w[i]).to_be_bytes()); }
     if !gsp_verify(ctx, phat, ihat, d, &ct_mul(ihat, &w[0]).sub(&ct_mul(&bs.ti, &w[3])), &out) {
-        return Err("falha na prova de posse (autoverificação)".into());
+        return Err("ownership proof failed (self-check)".into());
     }
     Ok(out)
 }

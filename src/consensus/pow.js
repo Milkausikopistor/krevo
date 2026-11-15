@@ -1,20 +1,20 @@
-// Prova de trabalho "KrevoHash": BLAKE2b + multiplicação por matriz 64×64.
+// "KrevoHash" proof of work: BLAKE2b + multiplication by a 64×64 matrix.
 //
-// Inspirada no kHeavyHash do Kaspa: a cada modelo de bloco, uma matriz 64×64 de
-// 4 bits é gerada a partir do hash pré-PoW. Cada tentativa:
+// Inspired by Kaspa's kHeavyHash: for each block template, a 64×64 matrix of 4-bit values
+// is generated from the pre-PoW hash. Each attempt:
 //   h1 = BLAKE2b("pow1" || prePow || timestamp || nonce)
-//   v  = 64 nibbles de h1;  p_i = (Σ_j M[i][j]·v_j) >> 10
+//   v  = 64 nibbles of h1;  p_i = (Σ_j M[i][j]·v_j) >> 10
 //   h2 = BLAKE2b("pow2" || h1 XOR p)
-// A etapa de matriz é limitada por cálculo (não por memória), barata para
-// verificar e eficiente em energia em hardware dedicado; a verificação de um
-// bloco custa microssegundos, então nós comuns validam 10 blocos/s com folga.
+// The matrix step is compute-bound (not memory-bound), cheap to verify and energy-efficient
+// on dedicated hardware; verifying a block takes microseconds, so ordinary nodes validate
+// 10 blocks/s with room to spare.
 
 import { createHash } from 'node:crypto';
 import { u64le } from '../util/bytes.js';
 
 const ONE256 = 1n << 256n;
 
-// ----------------------------------------------------- alvo compacto (bits)
+// ----------------------------------------------------- compact target (bits)
 export function compactToTarget(bits) {
   const exp = bits >>> 24, mant = BigInt(bits & 0x007fffff);
   if (bits & 0x00800000) throw new Error('alvo negativo');
@@ -29,7 +29,7 @@ export function targetToCompact(t) {
 }
 export const calcWork = (bits) => ONE256 / (compactToTarget(bits) + 1n);
 
-// ------------------------------------------------------ gerador xoshiro256**
+// ------------------------------------------------------ xoshiro256** generator
 function xoshiro(seed) {
   const M = (1n << 64n) - 1n;
   const s = [0, 1, 2, 3].map((i) => seed.readBigUInt64LE(i * 8));
@@ -43,7 +43,7 @@ function xoshiro(seed) {
   };
 }
 
-function rankModPrime(mat) { // posto da matriz 64×64 sobre GF(65521) — determinístico
+function rankModPrime(mat) { // rank of the 64×64 matrix over GF(65521) — deterministic
   const p = 65521, a = Array.from({ length: 64 }, (_, i) => Array.from(mat.subarray(i * 64, i * 64 + 64)));
   let rank = 0;
   for (let col = 0; col < 64 && rank < 64; col++) {
@@ -85,7 +85,7 @@ export class PowState {
     this.v = new Uint8Array(64);
     this.mix = Buffer.alloc(32);
   }
-  /** Retorna o hash final (32 bytes, interpretado como inteiro little-endian). */
+  /** Returns the final hash (32 bytes, read as a little-endian integer). */
   hash(timestamp, nonce) {
     const h1 = createHash('blake2b512').update(P1).update(this.prePowHash)
       .update(u64le(timestamp)).update(u64le(nonce)).digest();
@@ -101,7 +101,7 @@ export class PowState {
   }
 }
 
-/** Compara hash (little-endian) com alvo sem converter para BigInt. */
+/** Compares a (little-endian) hash with the target without converting to BigInt. */
 export function hashMeetsTarget(hash, targetLE) {
   for (let i = 31; i >= 0; i--) {
     if (hash[i] < targetLE[i]) return true;

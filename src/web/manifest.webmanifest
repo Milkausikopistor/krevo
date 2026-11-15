@@ -1,14 +1,14 @@
 {
-  "name": "Krevo — carteira",
+  "name": "Krevo — wallet",
   "short_name": "Krevo",
-  "description": "Carteira leve e privada da Krevo. As chaves ficam neste aparelho.",
+  "description": "Light, private Krevo wallet. Your keys stay on this device.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0b1220",
-  "theme_color": "#0b1220",
-  "lang": "pt-BR",
+  "background_color": "#0d0916",
+  "theme_color": "#0d0916",
+  "lang": "en",
   "icons": [
     { "src": "/src/web/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
     { "src": "/src/web/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }

@@ -1,12 +1,12 @@
-//! Medição estatística de tempo constante (método "dudect", Reparaz–Balasch–Verbauwhede 2017).
+//! Statistical constant-time measurement ("dudect" method, Reparaz–Balasch–Verbauwhede 2017).
 //!
-//! Para cada operação com segredo, duas classes de entradas são intercaladas ao acaso:
-//!   classe 0 — um segredo FIXO e "especial" (ex.: k = 1, valor 0: poucos bits ligados);
-//!   classe 1 — um segredo ALEATÓRIO novo a cada medida.
-//! Se o tempo dependesse do segredo, as duas distribuições de tempo seriam diferentes; o teste t
-//! de Welch mede isso (também depois de cortar a cauda em vários percentis, como o dudect).
-//! |t| > 4,5 = vazamento detectado. Um CONTROLE com a multiplicação de tempo variável (a de
-//! verificação) precisa acusar vazamento — prova de que o teste enxerga quando há.
+//! For each operation with a secret, two classes of inputs are interleaved at random:
+//!   class 0 — a FIXED and "special" secret (e.g. k = 1, value 0: few bits set);
+//!   class 1 — a new RANDOM secret for each measurement.
+//! If the timing depended on the secret, the two timing distributions would differ; Welch's
+//! t-test measures that (also after cropping the tail at several percentiles, like dudect).
+//! |t| > 4.5 = leak detected. A CONTROL with the variable-time multiplication (the
+//! verification one) must report a leak — proof that the test sees it when there is one.
 //!
 //!   cargo test ct_timing -- --ignored --nocapture        (≈1–2 min)
 
@@ -38,8 +38,8 @@ impl Welch {
     }
 }
 
-/// Mede `n` execuções; `prep(classe)` prepara a entrada (fora do cronômetro), `run` executa.
-/// Devolve o maior |t| entre: sem corte e cortes nos percentis 50/75/90/95/99.
+/// Measures `n` executions; `prep(class)` prepares the input (outside the stopwatch), `run` executes.
+/// Returns the largest |t| among: no cropping and cropping at the 50/75/90/95/99 percentiles.
 fn dudect<T>(n: usize, seed: u64, mut prep: impl FnMut(usize, &mut Rng) -> T, mut run: impl FnMut(&T)) -> f64 {
     let mut rng = Rng(seed | 1);
     for _ in 0..n / 20 { let x = prep((rng.next() & 1) as usize, &mut rng); run(&x); } // aquecimento
@@ -55,7 +55,7 @@ fn dudect<T>(n: usize, seed: u64, mut prep: impl FnMut(usize, &mut Rng) -> T, mu
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mut all = Welch::default();
     for &(c, x) in &samples { all.push(c, x); }
-    if std::env::var("KREVO_CT_VERBOSE").is_ok() { println!("   médias: classe 0 = {:.0} ns, classe 1 = {:.0} ns", all.mean[0], all.mean[1]); }
+    if std::env::var("KREVO_CT_VERBOSE").is_ok() { println!("   means: class 0 = {:.0} ns, class 1 = {:.0} ns", all.mean[0], all.mean[1]); }
     let mut best: f64 = 0.0;
     for pct in [100.0, 99.0, 95.0, 90.0, 75.0, 50.0] {
         let cut = sorted[((sorted.len() - 1) as f64 * pct / 100.0) as usize];
@@ -75,21 +75,21 @@ fn ct_timing() {
     let base = mul_g(&Sc::from_u64(0x1234_5678));
     let mut report = vec![];
     let mut check = |name: &str, t: f64, must_leak: bool| {
-        report.push(format!("{name:<44} |t| = {t:7.2}  {}", if must_leak { if t > 4.5 { "vazamento detectado (esperado: controle)" } else { "CONTROLE NÃO DETECTOU" } } else if t > 4.5 { "VAZAMENTO" } else { "ok" }));
+        report.push(format!("{name:<44} |t| = {t:7.2}  {}", if must_leak { if t > 4.5 { "leak detected (expected: control)" } else { "CONTROL DID NOT DETECT" } } else if t > 4.5 { "LEAK" } else { "ok" }));
         (t > 4.5) == must_leak
     };
     let mut ok = true;
     let n = 20_000;
-    ok &= check("k·G tempo constante (k = 1 × aleatório)", dudect(n, 1, |c, r| { let x = sc(r); if c == 0 { one } else { x } }, |k| { black_box(mul_g_ct(k)); }), false);
-    ok &= check("k·P tempo constante (k = 1 × aleatório)", dudect(n, 2, |c, r| { let x = sc(r); if c == 0 { one } else { x } }, |k| { black_box(mul_ct(&base, k)); }), false);
-    ok &= check("k·H tempo constante (k = 1 × aleatório)", dudect(n, 3, |c, r| { let x = sc(r); if c == 0 { one } else { x } }, |k| { black_box(mul_h_ct(k)); }), false);
+    ok &= check("k·G constant time (k = 1 × random)", dudect(n, 1, |c, r| { let x = sc(r); if c == 0 { one } else { x } }, |k| { black_box(mul_g_ct(k)); }), false);
+    ok &= check("k·P constant time (k = 1 × random)", dudect(n, 2, |c, r| { let x = sc(r); if c == 0 { one } else { x } }, |k| { black_box(mul_ct(&base, k)); }), false);
+    ok &= check("k·H constant time (k = 1 × random)", dudect(n, 3, |c, r| { let x = sc(r); if c == 0 { one } else { x } }, |k| { black_box(mul_h_ct(k)); }), false);
     let fixed = Sc::from_u64(0xdead_beef_cafe);
-    ok &= check("Schnorr (chave fixa × aleatória)", dudect(n / 2, 4, |c, r| { let x = sc(r); if c == 0 { fixed } else { x } }, |x| { black_box(schnorr_sign(x, b"m", "sig").unwrap()); }), false);
-    ok &= check("prova de intervalo (valor 0 × aleatório)", dudect(600, 5, |c, r| if c == 0 { 0u64 } else { r.next() }, |v| { black_box(range_prove(&[*v], &[one]).unwrap()); }), false);
+    ok &= check("Schnorr (fixed × random key)", dudect(n / 2, 4, |c, r| { let x = sc(r); if c == 0 { fixed } else { x } }, |x| { black_box(schnorr_sign(x, b"m", "sig").unwrap()); }), false);
+    ok &= check("range proof (value 0 × random)", dudect(600, 5, |c, r| if c == 0 { 0u64 } else { r.next() }, |v| { black_box(range_prove(&[*v], &[one]).unwrap()); }), false);
     let p1: P1 = base;
     let fk = sc(&mut Rng(77));
-    ok &= check("k·G (k fixo aleatório × aleatório)", dudect(n, 7, |c, r| { let x = sc(r); if c == 0 { fk } else { x } }, |k| { black_box(mul_g_ct(k)); }), false);
-    ok &= check("CONTROLE: k·P de tempo variável (verificação)", dudect(n, 6, |c, r| { let x = sc(r); if c == 0 { one } else { x } }, |k| { black_box(p1.mul(k)); }), true);
+    ok &= check("k·G (fixed random k × random)", dudect(n, 7, |c, r| { let x = sc(r); if c == 0 { fk } else { x } }, |k| { black_box(mul_g_ct(k)); }), false);
+    ok &= check("CONTROL: variable-time k·P (verification)", dudect(n, 6, |c, r| { let x = sc(r); if c == 0 { one } else { x } }, |k| { black_box(p1.mul(k)); }), true);
     println!("\n{}", report.join("\n"));
-    assert!(ok, "resultado inesperado na medição de tempo constante");
+    assert!(ok, "unexpected result in the constant-time measurement");
 }

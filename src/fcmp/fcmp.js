@@ -1,24 +1,24 @@
-// FCMP — prova de pertencimento à cadeia INTEIRA para uma entrada privada.
+// FCMP — full-chain membership proof for a private input.
 //
-// Em vez de esconder a moeda gasta entre 16 iscas (anel), quem gasta prova que ela é
-// UMA das N saídas privadas que já existiram, sem dizer qual. O conjunto de anonimato é
-// a rede inteira.
+// Instead of hiding the spent coin among 16 decoys (a ring), the spender proves that it is
+// ONE of the N private outputs that have ever existed, without saying which. The anonymity
+// set is the entire network.
 //
-// Quem prova re-randomiza a saída e o caminho até a raiz:
+// The prover re-randomizes the output and the path up to the root:
 //   P̂ = P + r1·T     Î = I + r1·T_I     Ĉ = C + r1·T_C        (I = Hp(P))
-//   L̂ = L + r2·G6    N̂_l = N_l + r·G_blind(l)                  (nós do caminho, cegados)
-// e publica duas provas Bulletproofs de circuito (uma em cada curva do ciclo):
-//   • sobre E2: "descegando" P̂, Î, Ĉ com os bits de r1, saem exatamente as coordenadas
-//     abertas pela folha L̂; e cada nó de E1 do caminho, descegado, é filho do nó acima;
-//   • sobre E1: a folha e cada nó de E2 do caminho, descegados com r2, são filhos do nó
-//     acima — até a raiz pública.
-// Por fim, uma prova de Schnorr generalizada (GSP) mostra, sem revelar nada:
-//   P̂ = p·G + t·T            (quem gasta conhece a chave)
-//   p·P̂ = q·G + y·T          (amarra y = p·t)
-//   KI = p·Î − y·T_I         (logo KI = p·Hp(P): a MESMA imagem de chave dos anéis)
-//   Ĉ − C' = a·G + b·T_C     (o pseudo-compromisso C' tem o mesmo valor)
-// A imagem de chave igual à dos anéis impede gastar a mesma saída duas vezes, por
-// qualquer um dos dois caminhos.
+//   L̂ = L + r2·G6    N̂_l = N_l + r·G_blind(l)                  (path nodes, blinded)
+// and publishes two circuit Bulletproofs (one on each curve of the cycle):
+//   • over E2: "unblinding" P̂, Î, Ĉ with the bits of r1 yields exactly the coordinates
+//     opened by the leaf L̂; and each E1 node on the path, unblinded, is a child of the node above;
+//   • over E1: the leaf and each E2 node on the path, unblinded with r2, are children of the node
+//     above — up to the public root.
+// Finally, a generalized Schnorr proof (GSP) shows, without revealing anything:
+//   P̂ = p·G + t·T            (the spender knows the key)
+//   p·P̂ = q·G + y·T          (binds y = p·t)
+//   KI = p·Î − y·T_I         (so KI = p·Hp(P): the SAME key image as the rings)
+//   Ĉ − C' = a·G + b·T_C     (the pseudo-commitment C' has the same amount)
+// A key image equal to the rings' prevents spending the same output twice, through
+// either of the two paths.
 
 import { E1, E2, Fp, Fn } from './curve.js';
 import { ConstraintSystem, bitsGadget, windowsGadget, fixedBaseTable, unblindGadget,
@@ -32,11 +32,11 @@ import { commit } from '../crypto/pedersen.js';
 import * as core from '../crypto/wasm.js';
 import { H } from '../crypto/hash.js';
 
-const W = 86;                       // janelas de 3 bits (258 bits ≥ 256)
-const SCALAR_GATES = 7 * W;         // bits (3W) + produtos das janelas (4W)
-const UNBLIND_GATES = 3 * W + 1;    // (W−1) somas de 3 portas + soma final (3) + checagem (1)
+const W = 86;                       // 3-bit windows (258 bits ≥ 256)
+const SCALAR_GATES = 7 * W;         // bits (3W) + window products (4W)
+const UNBLIND_GATES = 3 * W + 1;    // (W−1) 3-gate additions + final addition (3) + check (1)
 
-// ------------------------------------------------------------------ bases públicas
+// ------------------------------------------------------------------ public bases
 let _bases = null;
 export function bases() {
   if (!_bases) {
@@ -56,7 +56,7 @@ function table(curve, base, omega) {
 const toE1 = (p) => { const a = p.affine(); return E1.point(a[0], a[1]); };
 const toSecp = (p) => Point.fromAffine(p.x, p.y);
 
-/** Tamanhos dos dois circuitos para profundidade d (o pior caso fixa n). */
+/** Sizes of the two circuits for depth d (the worst case fixes n). */
 export function circuitSizes(d, b) {
   const sel = UNBLIND_GATES + 1 + (b - 1);
   const g2 = SCALAR_GATES + 3 * UNBLIND_GATES + Math.floor(d / 2) * sel;
@@ -71,10 +71,10 @@ export function fcmpProofSize(N, b) {
   return 4 * 33 + (d - 1) * 33 + bpProofSize(s.n1, s.K1) + bpProofSize(s.n2, s.K2) + GSP_SIZE;
 }
 
-// ------------------------------------------------------------------ circuitos
+// ------------------------------------------------------------------ circuits
 function addNodeVC(cs, st, w, l) {
   const seg = segment(l, st.b);
-  if (l === st.d) { // raiz: pública, sem cegamento
+  if (l === st.d) { // root: public, no blinding
     const e = w ? new Map(w.levels[l].entries.map((v, j) => [seg.off + j, v])) : null;
     return cs.addVC(st.root, e, 0n);
   }
@@ -94,7 +94,7 @@ function selectInParent(cs, st, parentLevel, vcIdx, x) {
   selectGadget(cs, entries, x);
 }
 
-/** Circuito sobre E2 (campo F_p): desceguem-se pontos de E1 com r1. */
+/** Circuit over E2 (field F_p): points of E1 are unblinded with r1. */
 function buildE2(st, w) {
   const B = bases(), cs = new ConstraintSystem(Fp.m, !!w);
   cs.addVC(st.Lhat, w ? new Map([...w.coords.map((v, i) => [i, v]), [LEAF_BLIND, w.r2]]) : null, w ? w.kL : 0n);
@@ -116,7 +116,7 @@ function buildE2(st, w) {
   return cs;
 }
 
-/** Circuito sobre E1 (campo F_n): desceguem-se a folha e os nós de E2 com r2. */
+/** Circuit over E1 (field F_n): the leaf and the E2 nodes are unblinded with r2. */
 function buildE1(st, w) {
   const B = bases(), cs = new ConstraintSystem(Fn.m, !!w);
   const vcOf = new Map();
@@ -148,7 +148,7 @@ function gspChallenge(ctx, R) { return hashToScalar('fcmp/gsp', ctx, ...R); }
 
 const GSP_W = ['p', 't', 'q', 'y', 'a', 'b'];
 function gspProve(ctx, pub, wit) {
-  // núcleo em Rust: tempo constante, nonces hedged, prova conferida antes de sair
+  // Rust core: constant time, hedged nonces, proof checked before returning
   if (core.available()) return core.gspProve(ctx, pub.Phat.toBytes(), pub.Ihat.toBytes(), pub.D.toBytes(), GSP_W.map((n) => modN(wit[n])));
   const B = bases();
   const secret = GSP_W.map((n) => scalarToBytes(wit[n]));
@@ -162,11 +162,11 @@ function gspProve(ctx, pub, wit) {
   const e = gspChallenge(ctx, R);
   const s = GSP_W.map((n) => modN(k[n] + e * wit[n]));
   const proof = Buffer.concat([scalarToBytes(e), ...s.map(scalarToBytes)]);
-  if (!gspVerify(ctx, pub, proof)) throw new Error('fcmp: falha na prova de posse (verificação)');
+  if (!gspVerify(ctx, pub, proof)) throw new Error('fcmp: ownership proof failed (verification)');
   return proof;
 }
 
-/** Prova de posse com as testemunhas explícitas (usada pelo cofre em JavaScript, src/crypto/vault.js). */
+/** Ownership proof with explicit witnesses (used by the JavaScript vault, src/crypto/vault.js). */
 export const gspProveWit = (ctx, pub, wit) => gspProve(ctx, pub, wit);
 
 function gspVerify(ctx, pub, buf) {
@@ -184,24 +184,24 @@ function gspVerify(ctx, pub, buf) {
   return gspChallenge(ctx, R) === e;
 }
 
-// ------------------------------------------------------------------ provar
+// ------------------------------------------------------------------ prove
 /**
- * Monta o enunciado público e a testemunha de uma entrada, para cegamentos (r1, r2) dados.
- *  path: [{ level, idx, entries }] do nível 1 até a raiz (tree.pathForChunk)
- *  leafPos: posição da saída dentro do nó de nível 1 (índice global % branch)
- *  P, C: pontos da saída (Point ou 33 bytes)
+ * Builds the public statement and the witness of an input, for given blindings (r1, r2).
+ *  path: [{ level, idx, entries }] from level 1 up to the root (tree.pathForChunk)
+ *  leafPos: position of the output within the level-1 node (global index % branch)
+ *  P, C: the output's points (Point or 33 bytes)
  */
 function setup({ branch: b, N, path, leafPos, P, C }, r1, r2) {
   const d = depthFor(N, b);
-  if (path.length !== d) throw new Error('fcmp: caminho com profundidade errada');
+  if (path.length !== d) throw new Error('fcmp: path with the wrong depth');
   const leaf = leafData(P, C);
-  if (path[0].entries[leafPos] !== leaf.x) throw new Error('fcmp: a saída não está nessa posição da árvore');
+  if (path[0].entries[leafPos] !== leaf.x) throw new Error('fcmp: the output is not at that position in the tree');
   const levels = [];
   let childX = leaf.x;
   for (let l = 1; l <= d; l++) {
     const { entries, idx } = path[l - 1];
     const pos = l === 1 ? leafPos : path[l - 2].idx % b;
-    if (entries[pos] !== childX) throw new Error(`fcmp: caminho inconsistente no nível ${l}`);
+    if (entries[pos] !== childX) throw new Error(`fcmp: inconsistent path at level ${l}`);
     const seg = segment(l, b), gens = bpGens(seg.curve, seg.blind + 1);
     const raw = seg.curve.msm(entries, gens.G.slice(seg.off, seg.off + entries.length));
     const perm = l < d ? makePermissible(seg.curve, raw, gens.h) : { k: 0n, point: raw };
@@ -222,41 +222,41 @@ function setup({ branch: b, N, path, leafPos, P, C }, r1, r2) {
   return { st, w: { r1, r2, coords: leaf.coords, kL: leaf.k, levels }, leaf, sizes: circuitSizes(d, b) };
 }
 
-/** Uma das duas provas Bulletproofs ('E1' ou 'E2'), já codificada. */
+/** One of the two Bulletproofs ('E1' or 'E2'), already encoded. */
 function proveHalfFrom({ st, w, sizes }, half) {
   const cs = half === 'E1' ? buildE1(st, w) : buildE2(st, w);
   cs.n = half === 'E1' ? sizes.n1 : sizes.n2;
-  if (cs.nGates > cs.n) throw new Error('fcmp: circuito maior que o previsto');
+  if (cs.nGates > cs.n) throw new Error('fcmp: circuit larger than expected');
   const curve = half === 'E1' ? E1 : E2;
   return encodeBpProof(curve, bpProve(curve, cs, transcriptFor(half, st)));
 }
 
-/** Para as threads de prova: job = { branch, N, path, leafPos, P, C (bytes), r1, r2 }. */
+/** For the proving threads: job = { branch, N, path, leafPos, P, C (bytes), r1, r2 }. */
 export function proveHalf(job, half) { return proveHalfFrom(setup(job, job.r1, job.r2), half); }
 
-/** Cegamentos novos para uma entrada. */
+/** Fresh blindings for an input. */
 export function newBlinds() { return { r1: randomScalar(), r2: Fp.random() }; }
 
-/** Parte cara (as duas provas de circuito), sequencial. Não depende da mensagem assinada. */
+/** Expensive part (the two circuit proofs), sequential. Does not depend on the signed message. */
 export function fcmpPrepare(args, blinds = newBlinds()) {
   const s = setup(args, blinds.r1, blinds.r2);
   return finishPrep(s, proveHalfFrom(s, 'E1'), proveHalfFrom(s, 'E2'));
 }
-/** Junta o enunciado às duas provas (vindas daqui ou das threads). */
+/** Joins the statement with the two proofs (from here or from the threads). */
 export function finishPrep(s, bp1, bp2) {
   return { st: s.st, leaf: s.leaf, r1: s.w.r1, head: encodeHead(s.st), bps: Buffer.concat([bp1, bp2]) };
 }
 export function setupFor(args, blinds) { return setup(args, blinds.r1, blinds.r2); }
 
 /**
- * Parte final, rápida: a prova de Schnorr generalizada presa à transação (msg = sighash).
- *  p: chave de uso única;  x, v: cegamento e valor de C;  pseudoMask: de C' = commit(v, pseudoMask)
- * Retorna { proof, keyImage, pseudo }.
+ * Final, fast part: the generalized Schnorr proof bound to the transaction (msg = sighash).
+ *  p: one-time key;  x, v: blinding and amount of C;  pseudoMask: of C' = commit(v, pseudoMask)
+ * Returns { proof, keyImage, pseudo }.
  */
 export function fcmpFinish(pre, { p, spend, P, x, v, pseudoMask, msg }) {
   const { st, leaf, r1, head, bps } = pre;
   const pseudo = commit(v, pseudoMask);
-  // com o cofre (spend), a chave de uso único não sai do núcleo: ele calcula a imagem de chave e a prova
+  // with the vault (spend), the one-time key never leaves the core: it computes the key image and the proof
   const KI = spend ? spend.keyImage(P instanceof Point ? P : Point.fromBytes(P)) : leaf.I.mul(p);
   const pub = { Phat: toSecp(st.Phat), Ihat: toSecp(st.Ihat), D: toSecp(st.Chat).sub(pseudo), KI };
   const ctx = H('fcmp/ctx', msg, head, bps, pseudo, KI);
@@ -265,7 +265,7 @@ export function fcmpFinish(pre, { p, spend, P, x, v, pseudoMask, msg }) {
   return { proof: Buffer.concat([head, bps, gsp]), keyImage: KI, pseudo };
 }
 
-/** Prova completa (sequencial). Ver fcmpPrepare / fcmpFinish e src/fcmp/parallel.js. */
+/** Full proof (sequential). See fcmpPrepare / fcmpFinish and src/fcmp/parallel.js. */
 export function fcmpProve(args) { return fcmpFinish(fcmpPrepare(args), args); }
 
 function encodeHead(st) {
@@ -274,17 +274,17 @@ function encodeHead(st) {
   return Buffer.concat(parts);
 }
 
-// ------------------------------------------------------------------ verificar
+// ------------------------------------------------------------------ verify
 /**
- * Confere a prova de uma entrada e acrescenta as equações dos Bulletproofs aos lotes
- * (batch = { e1: BpBatch(E1), e2: BpBatch(E2) }). Lança erro se algo não conferir;
- * o veredito final vem de batch.e1.check() && batch.e2.check().
- *  root: { point, count } da árvore com N saídas (tree.root(N))
+ * Checks an input's proof and adds the Bulletproofs equations to the batches
+ * (batch = { e1: BpBatch(E1), e2: BpBatch(E2) }). Throws if anything does not check out;
+ * the final verdict comes from batch.e1.check() && batch.e2.check().
+ *  root: { point, count } of the tree with N outputs (tree.root(N))
  */
 export function fcmpVerifyInto(batch, { branch: b, N, root, proof, keyImage, pseudo, msg }) {
   const d = depthFor(N, b), sizes = circuitSizes(d, b);
-  if (proof.length !== fcmpProofSize(N, b)) throw new Error('fcmp: tamanho da prova');
-  if (keyImage.isInf()) throw new Error('fcmp: imagem de chave inválida');
+  if (proof.length !== fcmpProofSize(N, b)) throw new Error('fcmp: proof size');
+  if (keyImage.isInf()) throw new Error('fcmp: invalid key image');
   let o = 0;
   const e1 = () => { const p = E1.fromBytes(proof.subarray(o, o + 33)); o += 33; return p; };
   const e2 = () => { const p = E2.fromBytes(proof.subarray(o, o + 33)); o += 33; return p; };
@@ -295,10 +295,10 @@ export function fcmpVerifyInto(batch, { branch: b, N, root, proof, keyImage, pse
   const pr1 = decodeBpProof(E1, proof.subarray(o, o + s1), sizes.n1, sizes.K1); o += s1;
   const pr2 = decodeBpProof(E2, proof.subarray(o, o + s2), sizes.n2, sizes.K2); o += s2;
   const gsp = proof.subarray(o);
-  // GSP primeiro (barato)
+  // GSP first (cheap)
   const pub = { Phat: toSecp(st.Phat), Ihat: toSecp(st.Ihat), D: toSecp(st.Chat).sub(pseudo), KI: keyImage };
   const ctx = H('fcmp/ctx', msg, proof.subarray(0, headLen), proof.subarray(headLen, headLen + s1 + s2), pseudo, keyImage);
-  if (!gspVerify(ctx, pub, gsp)) throw new Error('fcmp: prova de posse/imagem de chave inválida');
+  if (!gspVerify(ctx, pub, gsp)) throw new Error('fcmp: invalid ownership/key image proof');
   const cs2 = buildE2(st, null); cs2.n = sizes.n2;
   const cs1 = buildE1(st, null); cs1.n = sizes.n1;
   bpVerifyInto(batch.e2, cs2, pr2, transcriptFor('E2', st));

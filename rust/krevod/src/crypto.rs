@@ -1,6 +1,6 @@
-//! Criptografia de consenso sobre secp256k1 (espelha src/crypto/*.js):
-//! geradores "nada na manga", Schnorr, Pedersen, imagens de chave, CLSAG, Bulletproofs de
-//! intervalo, MuHash3072, saídas furtivas da coinbase e ML-DSA-44.
+//! Consensus cryptography over secp256k1 (mirrors src/crypto/*.js):
+//! "nothing up my sleeve" generators, Schnorr, Pedersen, key images, CLSAG, range
+//! Bulletproofs, MuHash3072, coinbase stealth outputs and ML-DSA-44.
 
 use crate::curve::*;
 use crate::field::*;
@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 
 pub type Sc = Fe<ModN>;
 
-// ------------------------------------------------------------------ geradores
+// ------------------------------------------------------------------ generators
 pub fn g() -> P1 {
     static G: OnceLock<P1> = OnceLock::new();
     *G.get_or_init(|| {
@@ -26,14 +26,14 @@ fn g_table() -> &'static FixedBase<Secp> {
 }
 pub fn mul_g(k: &Sc) -> P1 { g_table().mul(k) }
 
-/// hashToPoint de src/crypto/secp256k1.js: H(domínio, partes…, u32le(ctr)).
+/// hashToPoint from src/crypto/secp256k1.js: H(domain, parts…, u32le(ctr)).
 pub fn hash_to_point_secp(base: H) -> P1 {
     P1::hash_to_point(|ctr| base.clone().b(&ctr.to_le_bytes()).d32())
 }
 /// hashToScalar: H64(…) big-endian mod n.
 pub fn hash_to_scalar(h: H) -> Sc { Sc::from_be_bytes_wide(&h.d64()) }
 
-/// Gerador de valor das quantias (Pedersen).
+/// Value generator for amounts (Pedersen). The Portuguese domain string is part of consensus: never translate it.
 pub fn hv() -> P1 {
     static HV: OnceLock<P1> = OnceLock::new();
     *HV.get_or_init(|| hash_to_point_secp(H::new("pedersen/H").s("gerador de valor do Krevo")).normalize())
@@ -48,7 +48,7 @@ pub fn commit(v: u64, x: &Sc) -> P1 { mul_g(x).add(&mul_h_u64(v)) }
 pub fn point_from_bytes(b: &[u8]) -> Option<P1> { P1::from_bytes(b) }
 pub fn scalar_from_bytes(b: &[u8]) -> Option<Sc> { Sc::from_be_bytes(b) }
 
-/// Hp(P): base da imagem de chave (memorizada).
+/// Hp(P): key image base (memoized).
 pub fn hash_point_for_key_image(p: &P1) -> P1 {
     static CACHE: OnceLock<Mutex<HashMap<[u8; 33], P1>>> = OnceLock::new();
     let key = p.to_bytes();
@@ -101,14 +101,14 @@ pub fn clsag_verify(msg: &[u8], ring: &[RingMember], pseudo: &P1, sig: &[u8], ki
     c == c0
 }
 
-// ------------------------------------------------------------------ Bulletproofs (intervalo)
+// ------------------------------------------------------------------ Bulletproofs (range)
 pub const BP_BITS: usize = 64;
 pub const BP_MAX_AGG: usize = 16;
 
 struct BpGens { gi: Vec<P1>, hi: Vec<P1>, u: P1 }
 fn bp_gens() -> &'static Mutex<BpGens> {
     static G: OnceLock<Mutex<BpGens>> = OnceLock::new();
-    G.get_or_init(|| Mutex::new(BpGens { gi: vec![], hi: vec![], u: hash_to_point_secp(H::new("bp/U").s("produto interno")).normalize() }))
+    G.get_or_init(|| Mutex::new(BpGens { gi: vec![], hi: vec![], u: hash_to_point_secp(H::new("bp/U").s("produto interno")).normalize() })) // ("inner product": part of consensus, never translate)
 }
 pub(crate) fn bp_ensure(n: usize) -> (Vec<P1>, Vec<P1>, P1) {
     let mut g = bp_gens().lock().unwrap();
@@ -122,7 +122,7 @@ pub(crate) fn bp_ensure(n: usize) -> (Vec<P1>, Vec<P1>, P1) {
     (g.gi[..n].to_vec(), g.hi[..n].to_vec(), g.u)
 }
 
-/// Transcrição de src/crypto/bulletproofs.js.
+/// Transcript of src/crypto/bulletproofs.js.
 pub(crate) struct BpTr([u8; 32]);
 pub(crate) enum TrX<'a> { P(&'a P1), S(&'a Sc), N(u64) }
 impl BpTr {
@@ -148,7 +148,7 @@ pub fn range_proof_size(m0: usize) -> usize {
     4 * 33 + 3 * 32 + rounds * 66 + 64
 }
 
-/// Verifica a prova agregada contra os compromissos V.
+/// Verifies the aggregated proof against the commitments V.
 pub fn verify_range(v: &[P1], proof: &[u8]) -> bool {
     (|| -> Option<bool> {
         let m0 = v.len();
@@ -269,10 +269,10 @@ impl MuHash {
     }
 }
 
-// ------------------------------------------------------------------ saída furtiva (coinbase)
+// ------------------------------------------------------------------ stealth output (coinbase)
 pub struct ShieldedOut { pub r: P1, pub p: P1, pub c: P1, pub enc_amount: [u8; 8], pub view_tag: u8 }
 
-/// makeShieldedOutput(…, coinbase = true): cegamento zero, C = v·H.
+/// makeShieldedOutput(…, coinbase = true): zero blinding, C = v·H.
 pub fn make_coinbase_shielded_output(a: &P1, b: &P1, r: &Sc, j: u64, v: u64) -> ShieldedOut {
     let rr = b.mul(r);
     let ss = a.mul(r).to_bytes();

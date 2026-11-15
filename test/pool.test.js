@@ -15,23 +15,23 @@ import { freePorts } from './helpers.js';
 const params = getParams('simnet');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-test('pool: divisão da recompensa, vardiff, alvos e durações', () => {
+test('pool: reward split, vardiff, targets and durations', () => {
   const parts = splitReward(1_000_000_007n, { a: 3, b: 1, c: 0 });
   assert.equal(parts.get('c'), undefined);
   const sum = [...parts.values()].reduce((x, y) => x + y, 0n);
-  assert.ok(sum <= 1_000_000_007n && sum > 1_000_000_007n - 10n, 'nunca distribui mais que a recompensa');
+  assert.ok(sum <= 1_000_000_007n && sum > 1_000_000_007n - 10n, 'never distributes more than the reward');
   assert.ok(parts.get('a') > 2n * parts.get('b'));
   assert.equal(splitReward(100n, {}).size, 0);
-  assert.equal(nextWeight(1000, 2), 4000, 'shares demais → dificuldade sobe (máx. 4×)');
+  assert.equal(nextWeight(1000, 2), 4000, 'too many shares → the difficulty goes up (max 4×)');
   assert.equal(nextWeight(1000, 0.25), 500);
-  assert.equal(nextWeight(300, 0), MIN_WEIGHT, 'nunca abaixo do mínimo');
+  assert.equal(nextWeight(300, 0), MIN_WEIGHT, 'never below the minimum');
   const blockTarget = 1n << 200n;
-  assert.equal(targetForWeight(2 ** 70, blockTarget), blockTarget, 'share nunca mais difícil que o bloco');
+  assert.equal(targetForWeight(2 ** 70, blockTarget), blockTarget, 'a share is never harder than the block');
   const t = targetForWeight(1 << 20, blockTarget);
   assert.ok(Math.abs(weightOfTarget(t) - (1 << 20)) <= 1);
   assert.equal(parseDuration('90s'), 90_000);
   assert.equal(parseDuration('2min'), 120_000);
-  assert.throws(() => parseDuration('daqui a pouco'));
+  assert.throws(() => parseDuration('in a little while'));
 });
 
 function client(port) {
@@ -51,7 +51,7 @@ function client(port) {
   const ready = new Promise((r) => sock.on('connect', r));
   return {
     req, ready, get job() { return job; }, close: () => sock.destroy(),
-    /** Acha um nonce válido para o trabalho atual e envia. */
+    /** Finds a valid nonce for the current job and submits it. */
     async share() {
       for (let k = 0; k < 100 && !job; k++) await sleep(10);
       const j = job, pow = new PowState(fromHex(j.prePowHash)), tgt = fromHex(j.target);
@@ -63,69 +63,69 @@ function client(port) {
   };
 }
 
-test('pool na rede: shares, blocos, divisão proporcional e pagamento (transparente e privado)', async () => {
+test('pool on the network: shares, blocks, proportional split and payout (transparent and private)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-pool-'));
   const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
   await node.start();
   const url = `http://127.0.0.1:${port + 1}`;
   const poolWallet = Wallet.create(path.join(dir, 'pool.json'), params, url);
-  const alice = Wallet.create(path.join(dir, 'a.json'), params, url); // recebe transparente
-  const bob = Wallet.create(path.join(dir, 'b.json'), params, url);   // recebe privado
-  const pool = await startPool({ params, rpcUrl: url, wallet: poolWallet, port: port + 2, webPort: port + 3, feePct: 2, minPayout: COIN / 100n, payoutEveryMs: 3_600_000, stateFile: path.join(dir, 'pool-estado.json') });
+  const alice = Wallet.create(path.join(dir, 'a.json'), params, url); // receives as transparent
+  const bob = Wallet.create(path.join(dir, 'b.json'), params, url);   // receives as private
+  const pool = await startPool({ params, rpcUrl: url, wallet: poolWallet, port: port + 2, webPort: port + 3, feePct: 2, minPayout: COIN / 100n, payoutEveryMs: 3_600_000, stateFile: path.join(dir, 'pool-state.json') });
   const A = client(port + 2), B = client(port + 2);
   try {
     await Promise.all([A.ready, B.ready]);
-    // regras do protocolo
-    assert.match((await A.req('submit', { jobId: '1', nonce: '1', timestamp: Date.now() })).error, /login/);
-    assert.match((await B.req('login', { address: 'krv1invalido' })).error, /endereço inválido/);
+    // protocol rules
+    assert.match((await A.req('submit', { jobId: '1', nonce: '1', timestamp: Date.now() })).error, /log in/);
+    assert.match((await B.req('login', { address: 'krv1invalid' })).error, /invalid address/);
     assert.ok((await A.req('login', { address: alice.tAddress, worker: 'rig-a' })).result.login);
     assert.ok((await B.req('login', { address: bob.sAddress, worker: 'rig-b' })).result.login);
-    assert.match((await A.req('submit', { jobId: '999999', nonce: '1', timestamp: Date.now() })).error, /expirado/);
+    assert.match((await A.req('submit', { jobId: '999999', nonce: '1', timestamp: Date.now() })).error, /expired/);
 
-    // Alice minera 3× mais que Bob
+    // Alice mines 3× more than Bob
     let blocks = 0;
     for (let round = 0; round < 30; round++) {
       for (let k = 0; k < 3; k++) { const r = await A.share(); assert.ok(r.result?.accepted, JSON.stringify(r)); if (r.result.block) blocks++; }
       const r = await B.share(); assert.ok(r.result?.accepted); if (r.result.block) blocks++;
     }
-    assert.ok(blocks > 20, `o pool achou ${blocks} blocos`);
-    // share repetida
+    assert.ok(blocks > 20, `the pool found ${blocks} blocks`);
+    // repeated share
     const j = A.job, pow = new PowState(fromHex(j.prePowHash)), ts = Math.max(j.timestamp, Date.now());
     let n = 0n; while (!hashMeetsTarget(pow.hash(ts, n), fromHex(j.target))) n++;
     await A.req('submit', { jobId: j.jobId, nonce: n.toString(), timestamp: ts });
-    assert.match((await A.req('submit', { jobId: j.jobId, nonce: n.toString(), timestamp: ts })).error, /repetida/);
+    assert.match((await A.req('submit', { jobId: j.jobId, nonce: n.toString(), timestamp: ts })).error, /repeated/);
 
-    // amadurecimento: mais blocos em cima e o laço de crédito roda
+    // maturing: more blocks on top and the crediting loop runs
     for (let k = 0; k < 20; k++) await A.share();
     await sleep(2500);
     const st = pool.stats();
     const ma = st.miners.find((m) => m.address === alice.tAddress), mb = st.miners.find((m) => m.address === bob.sAddress);
-    assert.ok(ma.balance > 0n && mb.balance > 0n, 'os dois receberam crédito');
+    assert.ok(ma.balance > 0n && mb.balance > 0n, 'both received credit');
     const ratio = Number(ma.balance) / Number(mb.balance);
-    assert.ok(ratio > 2 && ratio < 6, `proporção ${ratio.toFixed(2)} (Alice minerou 3× mais e ainda fez as últimas shares)`);
-    assert.ok(st.blocks.some((b) => b.status === 'creditado'));
-    assert.ok(st.pool.earned > 0n, 'o pool ficou com a taxa');
+    assert.ok(ratio > 2 && ratio < 6, `ratio ${ratio.toFixed(2)} (Alice mined 3× more and also made the last shares)`);
+    assert.ok(st.blocks.some((b) => b.status === 'credited'));
+    assert.ok(st.pool.earned > 0n, 'the pool kept the fee');
 
-    // pagamento: Alice em endereço transparente, Bob em endereço privado
+    // payout: Alice to a transparent address, Bob to a private address
     const pay = await pool.payoutNow();
-    assert.ok(pay?.txid, 'pagamento enviado');
-    for (let k = 0; k < 15; k++) await A.share(); // confirma o pagamento e amadurece as saídas privadas
+    assert.ok(pay?.txid, 'payout sent');
+    for (let k = 0; k < 15; k++) await A.share(); // confirms the payout and matures the private outputs
     await alice.sync(); await bob.sync();
     const paidA = pool.stats().miners.find((m) => m.address === alice.tAddress).paid;
     const paidB = pool.stats().miners.find((m) => m.address === bob.sAddress).paid;
     assert.equal(alice.balance().transparent + alice.balance().transparentImmature, paidA);
     const bb = bob.balance();
-    assert.equal(bb.shielded + bb.shieldedImmature, paidB, 'Bob recebeu de forma privada');
-    // página web e API
+    assert.equal(bb.shielded + bb.shieldedImmature, paidB, 'Bob was paid privately');
+    // web page and API
     const html = await (await fetch(`http://127.0.0.1:${port + 3}/`)).text();
-    assert.match(html, /Pool de mineração Krevo/);
-    assert.match(html, /privado/);
-    const api = await (await fetch(`http://127.0.0.1:${port + 3}/api/minerador/${alice.tAddress}`)).json();
+    assert.match(html, /Krevo mining pool/);
+    assert.match(html, /private/);
+    const api = await (await fetch(`http://127.0.0.1:${port + 3}/api/miner/${alice.tAddress}`)).json();
     assert.equal(api.address, alice.tAddress);
-    // o estado sobrevive a reinícios
+    // the state survives restarts
     await sleep(700);
-    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'pool-estado.json'), 'utf8'));
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'pool-state.json'), 'utf8'));
     assert.equal(BigInt(saved.paid[alice.tAddress]), paidA);
   } finally {
     A.close(); B.close();

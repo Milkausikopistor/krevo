@@ -1,7 +1,7 @@
-// Validação contra o BITCOIN CORE DE VERDADE (regtest). Opcional: só roda com
-//   BITCOIND=/caminho/do/bitcoind node --test test/bitcoin-core.test.js
-// Sobe um bitcoind isolado (só 127.0.0.1, sem rede P2P, pasta temporária) e confere que o
-// próprio Bitcoin Core aceita — e recusa — exatamente o que deve nas trocas atômicas.
+// Validation against the REAL BITCOIN CORE (regtest). Optional: it only runs with
+//   BITCOIND=/path/to/bitcoind node --test test/bitcoin-core.test.js
+// Starts an isolated bitcoind (127.0.0.1 only, no P2P network, temporary folder) and checks that
+// Bitcoin Core itself accepts — and rejects — exactly what it should in atomic swaps.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -25,7 +25,7 @@ import { createOffer, acceptOffer, importAcceptance, swapStep } from '../src/wal
 import { freePorts } from './helpers.js';
 
 const BITCOIND = process.env.BITCOIND;
-const skip = BITCOIND ? false : 'defina BITCOIND=caminho/do/bitcoind para validar contra o Bitcoin Core real';
+const skip = BITCOIND ? false : 'set BITCOIND=path/to/bitcoind to validate against the real Bitcoin Core';
 const net = BTC_NETWORKS.regtest;
 const sats = (btc) => Math.round(Number(btc) * 1e8);
 
@@ -40,7 +40,7 @@ async function startCore() {
   const core = new BitcoinCore(url);
   for (let i = 0; ; i++) {
     try { await core.rpc('getblockchaininfo'); break; } catch (e) {
-      if (i > 120) throw new Error('bitcoind não respondeu: ' + e.message);
+      if (i > 120) throw new Error('bitcoind did not respond: ' + e.message);
       await new Promise((r) => setTimeout(r, 250));
     }
   }
@@ -54,28 +54,28 @@ async function startCore() {
     pay: (address, value) => funder.rpc('sendtoaddress', [address, (Number(value) / 1e8).toFixed(8)], true),
     received: async (address) => sats((await core.rpc('scantxoutset', ['start', [`addr(${address})`]])).total_amount),
     stop: async () => {
-      try { await core.rpc('stop'); } catch { /* já parando */ }
+      try { await core.rpc('stop'); } catch { /* already stopping */ }
       await Promise.race([new Promise((r) => proc.once('exit', r)), new Promise((r) => setTimeout(r, 15_000))]);
       proc.kill();
     },
   };
 }
 
-test('Bitcoin Core real: endereços, script HTLC, resgate, reembolso e ataques', { skip, timeout: 120_000 }, async () => {
+test('real Bitcoin Core: addresses, HTLC script, claim, refund and attacks', { skip, timeout: 120_000 }, async () => {
   const c = await startCore();
   try {
-    console.log(`    validando contra ${c.version}`);
+    console.log(`    validating against ${c.version}`);
     const claimKey = 0x1111n, refundKey = 0x2222n;
     const dest = p2wpkhAddress(net, pubFromPriv(0x4444n));
     const va = await c.core.rpc('validateaddress', [dest]);
     assert.equal(va.isvalid, true);
-    assert.equal(va.scriptPubKey, decodeBtcAddress(net, dest).script.toString('hex'), 'mesmo scriptPubKey');
+    assert.equal(va.scriptPubKey, decodeBtcAddress(net, dest).script.toString('hex'), 'same scriptPubKey');
 
     const secret = randomBytes(32), hash = sha256(secret);
     const deadline = (await c.core.tip()).time + 3600;
     const h = btcHtlc(net, { hash, claimPub: pubFromPriv(claimKey), refundPub: pubFromPriv(refundKey), locktime: deadline });
     const ds = await c.core.rpc('decodescript', [h.script.toString('hex')]);
-    assert.equal(ds.segwit.address, h.address, 'o Bitcoin Core chega ao mesmo endereço P2WSH');
+    assert.equal(ds.segwit.address, h.address, 'Bitcoin Core reaches the same P2WSH address');
     assert.match(ds.asm, /^OP_IF OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 [0-9a-f]{64} OP_EQUALVERIFY [0-9a-f]{66} OP_ELSE \d+ OP_CHECKLOCKTIMEVERIFY OP_DROP [0-9a-f]{66} OP_ENDIF OP_CHECKSIG$/);
 
     const fund = async (htlc, value) => {
@@ -89,15 +89,15 @@ test('Bitcoin Core real: endereços, script HTLC, resgate, reembolso e ataques',
 
     const u = await fund(h, 100_000n);
     let r = await check(spend({ utxos: u, key: claimKey, secret: Buffer.alloc(32, 1) }).hex);
-    assert.equal(r.allowed, false, 'segredo errado');
+    assert.equal(r.allowed, false, 'wrong secret');
     assert.match(r['reject-reason'], /script-verify/);
     r = await check(spend({ utxos: u, key: 0x3333n, secret }).hex);
-    assert.equal(r.allowed, false, 'chave errada');
+    assert.equal(r.allowed, false, 'wrong key');
     r = await check(spend({ utxos: u, key: refundKey }).hex);
-    assert.equal(r.allowed, false, 'reembolso antes do prazo');
+    assert.equal(r.allowed, false, 'refund before the deadline');
     assert.match(r['reject-reason'], /non-final/);
 
-    // resgate certo: aceito, e o Bitcoin Core calcula o mesmo txid, peso e tamanho que nós
+    // the right claim: accepted, and Bitcoin Core computes the same txid, weight and size as we do
     const ok = spend({ utxos: u, key: claimKey, secret });
     r = await check(ok.hex);
     assert.equal(r.allowed, true, r['reject-reason']);
@@ -108,29 +108,29 @@ test('Bitcoin Core real: endereços, script HTLC, resgate, reembolso e ataques',
     assert.equal(await c.core.broadcast(ok.hex), ok.txid);
     await c.mine(1);
     const conf = await c.core.rpc('getrawtransaction', [ok.txid, true]);
-    assert.ok(conf.confirmations >= 1, 'confirmado num bloco');
-    assert.equal(conf.vin[0].txinwitness[1], secret.toString('hex'), 'o segredo fica público na testemunha');
+    assert.ok(conf.confirmations >= 1, 'confirmed in a block');
+    assert.equal(conf.vin[0].txinwitness[1], secret.toString('hex'), 'the secret becomes public in the witness');
     assert.equal(await c.received(dest), Number(ok.value));
 
-    // segredo de 31 bytes com hash certo: OP_SIZE 32 recusa
+    // 31-byte secret with the right hash: OP_SIZE 32 rejects it
     const s31 = randomBytes(31);
     const h31 = btcHtlc(net, { hash: sha256(s31), claimPub: pubFromPriv(claimKey), refundPub: pubFromPriv(refundKey), locktime: deadline });
     const u31 = await fund(h31, 50_000n);
     const t31 = spendBtcHtlc({ net, htlc: h31, utxos: u31, to: dest, feeRate: 2, key: claimKey, secret: Buffer.alloc(32) });
-    t31.tx.inputs[0].witness[1] = s31; // a assinatura não cobre a testemunha
+    t31.tx.inputs[0].witness[1] = s31; // the signature does not cover the witness
     r = await check(t31.tx.toHex());
-    assert.equal(r.allowed, false, 'segredo de 31 bytes');
+    assert.equal(r.allowed, false, '31-byte secret');
 
-    // reembolso: depois que a mediana de tempo passa do prazo
+    // refund: after the median time passes the deadline
     const u2 = await fund(h, 70_000n);
     const cheat = spend({ htlc: { ...h, locktime: deadline - 1800 }, utxos: u2, key: refundKey });
     await c.core.rpc('setmocktime', [deadline + 4 * 3600]);
     await c.mine(12);
     assert.ok((await c.core.tip()).mtp > deadline);
     r = await check(cheat.hex);
-    assert.equal(r.allowed, false, 'nLockTime abaixo do prazo do contrato');
+    assert.equal(r.allowed, false, 'nLockTime below the contract deadline');
     r = await check(spend({ utxos: u2, key: claimKey }).hex);
-    assert.equal(r.allowed, false, 'reembolso com a chave de quem resgata');
+    assert.equal(r.allowed, false, 'refund with the claimer\'s key');
     const refund = spend({ utxos: u2, key: refundKey });
     r = await check(refund.hex);
     assert.equal(r.allowed, true, r['reject-reason']);
@@ -150,7 +150,7 @@ async function mineVia(url, address, n) {
   }
 }
 
-test('troca atômica completa com o Bitcoin Core real (vender KRV e vender BTC)', { skip, timeout: 180_000 }, async () => {
+test('full atomic swap with the real Bitcoin Core (selling KRV and selling BTC)', { skip, timeout: 180_000 }, async () => {
   const c = await startCore();
   const params = getParams('simnet');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-core-swap-'));
@@ -168,26 +168,26 @@ test('troca atômica completa com o Bitcoin Core real (vender KRV e vender BTC)'
     const aliceBtc = p2wpkhAddress(net, pubFromPriv(0xa11cen)), bobBtc = p2wpkhAddress(net, pubFromPriv(0xb0bn));
     const step = async (w, id, expect) => { const r = await swapStep(w, id); assert.equal(r.action, expect, r.message); return r; };
 
-    // 1) Alice vende 3 KRV por 0,0015 BTC
+    // 1) Alice sells 3 KRV for 0.0015 BTC
     let o = createOffer(alice, { sell: 'krv', krv: 3n * COIN, btc: 150_000n, btcNet: 'regtest', btcPayout: aliceBtc, btcRpc: c.url, iWindow: 600, pWindow: 300 });
     let a = acceptOffer(bob, o.code, { btcPayout: bobBtc, btcRpc: c.url });
     importAcceptance(alice, a.code);
     await step(alice, o.id, 'lock');
     await mineKrv(1);
     const pay = await step(bob, a.id, 'pay-btc');
-    await c.pay(pay.address, 150_000n);               // Bob paga pela carteira do Bitcoin Core
+    await c.pay(pay.address, 150_000n);               // Bob pays from the Bitcoin Core wallet
     await c.mine(1);
     await step(bob, a.id, 'wait-secret');
-    await step(alice, o.id, 'claim');                  // revela o segredo no Bitcoin
+    await step(alice, o.id, 'claim');                  // reveals the secret on Bitcoin
     await c.mine(1);
-    await step(bob, a.id, 'claim');                    // Bob lê o segredo no Bitcoin Core e resgata os KRV
+    await step(bob, a.id, 'claim');                    // Bob reads the secret on Bitcoin Core and claims the KRV
     await mineKrv(1);
     await step(bob, a.id, 'done');
     await step(alice, o.id, 'done');
     const got = await c.received(aliceBtc);
     assert.ok(got > 150_000 - 2_000 && got < 150_000, `Alice recebeu ${got} sat no Bitcoin Core`);
 
-    // 2) Alice vende 0,0008 BTC por 2 KRV (Bob agora tem KRV)
+    // 2) Alice sells 0.0008 BTC for 2 KRV (Bob now has KRV)
     o = createOffer(alice, { sell: 'btc', krv: 2n * COIN, btc: 80_000n, btcNet: 'regtest', btcPayout: aliceBtc, btcRpc: c.url, iWindow: 600, pWindow: 300 });
     a = acceptOffer(bob, o.code, { btcPayout: bobBtc, btcRpc: c.url });
     importAcceptance(alice, a.code);
@@ -196,9 +196,9 @@ test('troca atômica completa com o Bitcoin Core real (vender KRV e vender BTC)'
     await c.mine(1);
     await step(bob, a.id, 'lock');
     await mineKrv(1);
-    await step(alice, o.id, 'claim');                  // revela o segredo na Krevo
+    await step(alice, o.id, 'claim');                  // reveals the secret on Krevo
     await mineKrv(1);
-    await step(bob, a.id, 'claim');                    // Bob resgata os BTC no Bitcoin Core
+    await step(bob, a.id, 'claim');                    // Bob claims the BTC on Bitcoin Core
     await c.mine(1);
     await step(bob, a.id, 'done');
     await step(alice, o.id, 'done');

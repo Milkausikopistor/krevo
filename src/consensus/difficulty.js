@@ -1,10 +1,10 @@
-// Ajuste de dificuldade (DAA) a cada bloco.
+// Difficulty adjustment (DAA) at every block.
 //
-// Janela = os W blocos mais recentes do passado do bloco (azuis E vermelhos,
-// pois todos representam hashrate). Novo alvo = alvo médio × tempo real / tempo
-// esperado. Para resistir a timestamps manipulados, o tempo real é medido entre
-// os percentis 5% e 95% dos timestamps da janela: um atacante com < 5% dos
-// blocos não consegue esticar nem encolher a janela.
+// Window = the W most recent blocks in the block's past (blue AND red, since all of them
+// represent hashrate). New target = average target × actual time / expected time. To resist
+// manipulated timestamps, the actual time is measured between the 5% and 95% percentiles of
+// the window's timestamps: an attacker with < 5% of the blocks cannot stretch or shrink the window.
+//
 
 import { compactToTarget, targetToCompact } from './pow.js';
 
@@ -46,7 +46,7 @@ export function requiredBits(params, store, headers, gd, powLimitBits) {
   return targetToCompact(next);
 }
 
-/** Tempo mediano passado: timestamp de um novo bloco precisa ser ≥ a ele. */
+/** Past median time: a new block's timestamp must be ≥ it. */
 export function pastMedianTime(params, store, headers, gd) {
   const win = daaWindow(store, headers, gd, params.pastMedianTimeWindow);
   const ts = win.map((h) => headers.get(h).timestamp).sort((a, b) => a - b);

@@ -1,6 +1,6 @@
-// Reprocessa um arquivo de blocos com o nó de REFERÊNCIA (JavaScript) e imprime o mesmo resumo
-// que `krevod replay` imprime — os dois precisam ser idênticos.
-//   node rust/krevod/vectors/replay.mjs <rede> <caminho/blocos.dat>
+// Reprocesses a block file with the REFERENCE node (JavaScript) and prints the same summary
+// that `krevod replay` prints — the two must be identical.
+//   node rust/krevod/vectors/replay.mjs <network> <path/blocks.dat>
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,5 +44,5 @@ const out = {
   kiCount: c.utxo.ki.size + view.diff.addKI.length,
   names: view.allNames().size,
 };
-console.error(`${ok} blocos aceitos, ${other} outros, em ${((Date.now() - t) / 1000).toFixed(2)} s`);
+console.error(`${ok} blocks accepted, ${other} others, in ${((Date.now() - t) / 1000).toFixed(2)} s`);
 console.log(JSON.stringify(out, null, 1));

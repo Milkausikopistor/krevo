@@ -1,9 +1,9 @@
-//! Motor de consenso (espelha src/consensus/consensus.js).
-//!  1. cabeçalho: PoW, pais (antichain), GHOSTDAG, dificuldade, timestamp, profundidade de merge
-//!  2. corpo: coinbase bem formada, transações válidas isoladamente, Merkle, massa
-//!  3. estado UTXO: o bloco aceita as transações do seu mergeset sobre o estado do pai
-//!     selecionado; compromisso MuHash e coinbase precisam conferir (senão: desqualificado)
-//!  4. virtual: o bloco hipotético sobre todas as pontas = o estado atual da rede
+//! Consensus engine (mirrors src/consensus/consensus.js).
+//!  1. header: PoW, parents (antichain), GHOSTDAG, difficulty, timestamp, merge depth
+//!  2. body: well-formed coinbase, transactions valid in isolation, Merkle, mass
+//!  3. UTXO state: the block accepts the transactions of its mergeset on top of the selected
+//!     parent's state; the MuHash commitment and the coinbase must match (otherwise: disqualified)
+//!  4. virtual: the hypothetical block on top of all tips = the current state of the network
 
 use crate::block::{merkle_root, Block, Header};
 use crate::bytes::*;
@@ -89,7 +89,7 @@ pub struct Consensus {
     pub genesis_hash: Hash,
     pub blocks_count: u64,
     pub reds_count: u64,
-    /// blocos desqualificados (hash, motivo) desde a última consulta — para o log do nó
+    /// disqualified blocks (hash, reason) since the last query — for the node's log
     pub disqualified: Vec<(Hash, String)>,
 }
 
@@ -121,7 +121,7 @@ pub fn build_genesis(p: &Params) -> Block {
 fn apply_tx(base: &UtxoSet, diff: &mut UtxoDiff, mh: &mut MuHash, tx: &Transaction, daa: u64, coinbase: bool) {
     for i in &tx.t_in {
         let k = (i.txid, i.index);
-        let e = UtxoView { base, diff }.get_t(&k).cloned().expect("entrada validada");
+        let e = UtxoView { base, diff }.get_t(&k).cloned().expect("validated input");
         mh.remove(&encode_t_entry(&k, &e));
         diff.spend_t(k, &e);
     }
@@ -170,11 +170,11 @@ impl Consensus {
     pub fn has(&self, h: &Hash) -> bool { self.store.has(h) }
     pub fn virt(&self) -> &Virtual { self.virt.as_ref().unwrap() }
 
-    /// Visão do estado do virtual (move a base para o pai selecionado do virtual se preciso).
+    /// View of the virtual's state (moves the base to the virtual's selected parent if needed).
     pub fn ensure_virtual_base(&mut self) { let sp = self.virt().gd.selected_parent.unwrap(); self.move_base(&sp); }
     pub fn virtual_view(&self) -> UtxoView<'_> { UtxoView { base: &self.utxo, diff: &self.virt().acceptance.diff } }
 
-    // ------------------------------------------------------------ entrada
+    // ------------------------------------------------------------ input
     pub fn add_block(&mut self, block: Block, now: u64, trusted: bool) -> AddResult {
         let hash = block.hash();
         if self.store.has(&hash) { return AddResult::Known(hash); }
@@ -219,24 +219,24 @@ impl Consensus {
         let p = &self.params;
         let h = &block.header;
         let parents = &h.parents;
-        if h.version != 1 { return Err("versão de cabeçalho desconhecida".into()); }
-        if parents.is_empty() || parents.len() > p.max_parents { return Err("número de pais inválido".into()); }
-        for i in 1..parents.len() { if parents[i - 1] >= parents[i] { return Err("pais fora de ordem ou repetidos".into()); } }
+        if h.version != 1 { return Err("unknown header version".into()); }
+        if parents.is_empty() || parents.len() > p.max_parents { return Err("invalid number of parents".into()); }
+        for i in 1..parents.len() { if parents[i - 1] >= parents[i] { return Err("parents out of order or repeated".into()); } }
         let target = compact_to_target(h.bits)?;
-        if target > compact_to_target(self.pow_limit_bits)? { return Err("alvo acima do limite".into()); }
-        if !check_pow(h) { return Err("prova de trabalho insuficiente".into()); }
+        if target > compact_to_target(self.pow_limit_bits)? { return Err("target above the limit".into()); }
+        if !check_pow(h) { return Err("insufficient proof of work".into()); }
         for i in 0..parents.len() {
             for j in 0..parents.len() {
-                if i != j && self.store.is_ancestor(&parents[i], &parents[j]) { return Err("pais não formam uma antichain".into()); }
+                if i != j && self.store.is_ancestor(&parents[i], &parents[j]) { return Err("parents do not form an antichain".into()); }
             }
         }
         let gd = self.ghostdag.run(&self.store, parents);
-        if gd.mergeset_blues.len() + gd.mergeset_reds.len() > p.mergeset_size_limit { return Err("mergeset grande demais".into()); }
-        if h.blue_score != gd.blue_score || h.blue_work != gd.blue_work || h.daa_score != gd.daa_score { return Err("dados GHOSTDAG do cabeçalho não conferem".into()); }
-        if h.bits != required_bits(p, &self.store, &self.headers, &gd, self.pow_limit_bits) { return Err("dificuldade incorreta".into()); }
-        if h.timestamp < past_median_time(p, &self.store, &self.headers, &gd) { return Err("timestamp anterior ao tempo mediano passado".into()); }
+        if gd.mergeset_blues.len() + gd.mergeset_reds.len() > p.mergeset_size_limit { return Err("mergeset too large".into()); }
+        if h.blue_score != gd.blue_score || h.blue_work != gd.blue_work || h.daa_score != gd.daa_score { return Err("header GHOSTDAG data does not match".into()); }
+        if h.bits != required_bits(p, &self.store, &self.headers, &gd, self.pow_limit_bits) { return Err("incorrect difficulty".into()); }
+        if h.timestamp < past_median_time(p, &self.store, &self.headers, &gd) { return Err("timestamp before the past median time".into()); }
         for x in &gd.mergeset_asc {
-            if gd.blue_score.saturating_sub(self.store.gd[x].blue_score) > p.merge_depth { return Err("bloco antigo demais no mergeset (limite de merge)".into()); }
+            if gd.blue_score.saturating_sub(self.store.gd[x].blue_score) > p.merge_depth { return Err("block too old in the mergeset (merge depth limit)".into()); }
         }
         Ok(gd)
     }
@@ -244,26 +244,26 @@ impl Consensus {
     fn validate_body(&self, block: &Block) -> Result<Vec<u8>, String> {
         let p = &self.params;
         let txs = &block.txs;
-        if txs.is_empty() { return Err("bloco sem coinbase".into()); }
+        if txs.is_empty() { return Err("block without coinbase".into()); }
         let cb = &txs[0];
-        if !cb.is_coinbase() || cb.version != 1 { return Err("primeira transação não é coinbase".into()); }
-        if cb.fee != 0 || cb.mass != 0 || !cb.range_proof.is_empty() || cb.binding_sig.is_some() { return Err("coinbase malformada".into()); }
-        if cb.payload.len() > p.max_coinbase_payload { return Err("payload da coinbase grande demais".into()); }
-        let (bs, md, _) = parse_coinbase_payload(&cb.payload).map_err(|_| "payload da coinbase inválido".to_string())?;
-        if bs != block.header.blue_score { return Err("blue score da coinbase não confere".into()); }
-        let a = parse_address_data(&md).ok_or("endereço do minerador inválido")?;
-        if !matches!(a.kind(), 't' | 's' | 'm' | 'q') { return Err("endereço do minerador inválido (precisa ser krv, krs, krq ou multiassinatura)".into()); }
+        if !cb.is_coinbase() || cb.version != 1 { return Err("first transaction is not a coinbase".into()); }
+        if cb.fee != 0 || cb.mass != 0 || !cb.range_proof.is_empty() || cb.binding_sig.is_some() { return Err("malformed coinbase".into()); }
+        if cb.payload.len() > p.max_coinbase_payload { return Err("coinbase payload too large".into()); }
+        let (bs, md, _) = parse_coinbase_payload(&cb.payload).map_err(|_| "invalid coinbase payload".to_string())?;
+        if bs != block.header.blue_score { return Err("coinbase blue score does not match".into()); }
+        let a = parse_address_data(&md).ok_or("invalid miner address")?;
+        if !matches!(a.kind(), 't' | 's' | 'm' | 'q') { return Err("invalid miner address (must be krv, krs, krq or multisig)".into()); }
         let mut mass = 0u64;
         let mut ids = HashSet::from([cb.id()]);
         for tx in &txs[1..] {
-            if tx.is_coinbase() { return Err("coinbase extra".into()); }
+            if tx.is_coinbase() { return Err("extra coinbase".into()); }
             validate_tx_stateless(tx, p)?;
-            if !ids.insert(tx.id()) { return Err("transação repetida no bloco".into()); }
+            if !ids.insert(tx.id()) { return Err("transaction repeated in the block".into()); }
             mass += tx.mass;
         }
-        if mass > p.max_block_mass { return Err("massa do bloco acima do limite".into()); }
+        if mass > p.max_block_mass { return Err("block mass above the limit".into()); }
         let hashes: Vec<[u8; 32]> = txs.iter().map(|t| t.hash()).collect();
-        if merkle_root(&hashes) != block.header.hash_merkle_root { return Err("raiz de Merkle incorreta".into()); }
+        if merkle_root(&hashes) != block.header.hash_merkle_root { return Err("incorrect Merkle root".into()); }
         Ok(md)
     }
 
@@ -283,17 +283,17 @@ impl Consensus {
         let h = &block.header;
         let mut reason = None;
         let mut cb_shielded = 0;
-        if h.utxo_commitment != res.muhash.digest() { reason = Some("compromisso UTXO incorreto"); }
-        else if h.accepted_id_merkle_root != res.accepted_root { reason = Some("raiz de transações aceitas incorreta"); }
+        if h.utxo_commitment != res.muhash.digest() { reason = Some("incorrect UTXO commitment"); }
+        else if h.accepted_id_merkle_root != res.accepted_root { reason = Some("incorrect accepted transactions root"); }
         else {
             let actual = &block.txs[0];
             let extra = parse_coinbase_payload(&actual.payload).map(|x| x.2).unwrap_or_default();
             match self.build_coinbase(&res, &gd, &parents, &self.miner_data[hash], &extra) {
                 Some((expected, sh)) => {
-                    if expected.serialize_body() != actual.serialize_body() { reason = Some("coinbase não confere com as recompensas devidas"); }
+                    if expected.serialize_body() != actual.serialize_body() { reason = Some("coinbase does not match the rewards due"); }
                     cb_shielded = sh;
                 }
-                None => reason = Some("coinbase não confere com as recompensas devidas"),
+                None => reason = Some("coinbase does not match the rewards due"),
             }
         }
         if let Some(r) = reason {
@@ -309,7 +309,7 @@ impl Consensus {
         true
     }
 
-    /// Move o estado materializado para o bloco `target` revertendo/aplicando diffs.
+    /// Moves the materialized state to block `target` by reverting/applying diffs.
     pub fn move_base(&mut self, target: &Hash) {
         if self.base_hash == *target { return; }
         let (mut a, mut b) = (self.base_hash, *target);
@@ -327,7 +327,7 @@ impl Consensus {
             self.acc.insert(*h, acc);
         }
         for h in apply.iter().rev() {
-            let acc = self.acc.remove(h).expect("bloco da cadeia sem estado");
+            let acc = self.acc.remove(h).expect("chain block without state");
             self.utxo.apply(&acc.diff);
             for id in &acc.accepted { self.tx_index.insert(*id, *h); }
             for (r, amount) in &acc.rewards { self.reward_index.insert(*r, RewardInfo { amount: *amount, paid_by: *h, red: false }); }
@@ -337,11 +337,11 @@ impl Consensus {
         self.base_hash = *target;
     }
 
-    /// Aceitação de um bloco (ou do virtual) com estes dados GHOSTDAG. Pré-condição: base = pai selecionado.
+    /// Acceptance of a block (or of the virtual) with this GHOSTDAG data. Precondition: base = selected parent.
     fn compute_acceptance(&self, gd: &GhostdagData) -> Acceptance {
         let p = &self.params;
         let sp = gd.selected_parent.unwrap();
-        assert_eq!(self.base_hash, sp, "base fora de posição");
+        assert_eq!(self.base_hash, sp, "base out of position");
         let sp_acc = &self.acc[&sp];
         let mut diff = UtxoDiff::default();
         let mut mh = sp_acc.muhash.clone();
@@ -399,7 +399,7 @@ impl Consensus {
 
     fn miner_addr(&self, h: &Hash) -> Option<Addr> { parse_address_data(&self.miner_data[h]) }
 
-    /// Coinbase exigida (e o valor que ela coloca no pool privado).
+    /// Required coinbase (and the amount it puts into the private pool).
     pub fn build_coinbase(&self, res: &Acceptance, gd: &GhostdagData, parents: &[Hash], miner_data: &[u8], extra: &[u8]) -> Option<(Transaction, u64)> {
         let mut recipients: Vec<(Addr, u64)> = vec![];
         for (h, amount) in &res.blue_rewards { recipients.push((self.miner_addr(h)?, *amount)); }
@@ -439,7 +439,7 @@ impl Consensus {
             if self.status.get(&c) == Some(&Status::Chain) { selected = Some(c); break; }
             for par in &self.store.parents[&c] { if seen.insert(*par) { cand.push(*par); } }
         }
-        let selected = selected.expect("nenhum bloco da cadeia");
+        let selected = selected.expect("no chain block");
         let mut vparents = vec![selected];
         for t in &tips {
             if vparents.len() >= p.max_parents { break; }
@@ -454,7 +454,7 @@ impl Consensus {
             if (size <= p.mergeset_size_limit && !too_deep) || vparents.len() == 1 { break gd; }
             vparents.pop();
         };
-        assert_eq!(gd.selected_parent, Some(selected), "virtual: pai selecionado inconsistente");
+        assert_eq!(gd.selected_parent, Some(selected), "virtual: inconsistent selected parent");
         self.move_base(&selected);
         let acceptance = self.compute_acceptance(&gd);
         let mut parents = vparents.clone();
@@ -465,7 +465,7 @@ impl Consensus {
         self.virt = Some(Virtual { parents, gd, acceptance, version: self.virtual_version, bits, pmt });
     }
 
-    /// Modelo de bloco para mineração (o virtual com as transações escolhidas).
+    /// Block template for mining (the virtual with the chosen transactions).
     pub fn build_template(&mut self, miner_data: &[u8], txs: Vec<Transaction>, extra: &[u8], now: u64) -> Option<Block> {
         parse_address_data(miner_data)?;
         self.ensure_virtual_base();
@@ -484,7 +484,7 @@ impl Consensus {
         Some(Block::new(header, all))
     }
 
-    // ----------------------------------------------------------- consultas
+    // ----------------------------------------------------------- queries
     pub fn tx_status(&self, txid: &[u8; 32]) -> serde_json::Value {
         let v = self.virt();
         if v.acceptance.accepted_set.contains(txid) {
@@ -515,7 +515,7 @@ impl Consensus {
         self.blocks[h].txs.iter().find(|t| t.id() == *txid)
     }
 
-    /// Moedas transparentes de uma trava no estado do virtual.
+    /// Transparent coins of a lock in the virtual's state.
     pub fn utxos_by_lock(&self, lock: &[u8]) -> Vec<(Op, TEntry)> {
         let v = self.virtual_view();
         let mut keys: Vec<Op> = self.utxo.by_lock.get(lock).cloned().unwrap_or_default();

@@ -1,11 +1,11 @@
-// Servidor de arquivos do app web da carteira (krevo carteira-web).
+// File server for the web wallet app (krevo web-wallet).
 //
-// IMPORTANTE: numa carteira web, quem entrega o CÓDIGO poderia roubar as chaves. Por isso o app
-// NÃO é servido pelo servidor leve (que não é confiável): rode-o no seu computador, ou hospede
-// numa origem em que você confie, e aponte para QUALQUER servidor leve — este sim pode ser de
-// terceiros. A política de segurança (CSP) só permite código deste mesmo endereço.
-// 'wasm-unsafe-eval' permite compilar o núcleo criptográfico em WebAssembly (src/crypto/krevo_core.wasm),
-// também servido daqui — não libera eval() de JavaScript.
+// IMPORTANT: in a web wallet, whoever serves the CODE could steal the keys. That is why the app is
+// NOT served by the light server (which is untrusted): run it on your own computer, or host it on
+// an origin you trust, and point it to ANY light server — that one may belong to anybody.
+// The security policy (CSP) only allows code from this same origin.
+// 'wasm-unsafe-eval' allows compiling the WebAssembly crypto core (src/crypto/krevo_core.wasm),
+// also served from here — it does not allow JavaScript eval().
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -38,7 +38,7 @@ export function startWebWallet({ port = 8091, host = '127.0.0.1', log = () => {}
       const type = file && TYPES[path.extname(file)];
       if (!file || !type || !file.startsWith(SRC + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...security });
-        return res.end('não encontrado');
+        return res.end('not found');
       }
       res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', ...security });
       res.end(fs.readFileSync(file));
@@ -50,7 +50,7 @@ export function startWebWallet({ port = 8091, host = '127.0.0.1', log = () => {}
     server.once('error', err);
     server.listen(port, host, () => {
       const a = server.address();
-      log(`carteira web em http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${a.port}`);
+      log(`web wallet at http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${a.port}`);
       ok({ server, url: `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${a.port}`, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }) });
     });
   });

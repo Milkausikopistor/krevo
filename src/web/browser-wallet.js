@@ -1,27 +1,39 @@
-// Carteira leve no navegador: os dados ficam no próprio aparelho, CIFRADOS com AES-256-GCM.
-// Da senha saem DUAS chaves (PBKDF2-SHA256, 600 mil iterações pelo WebCrypto; sem contexto
-// seguro — http em rede local —, 60 mil em JS puro):
-//   k1 — abre o bloco SECRETO (semente + frase). Usada só ao destravar (e ao mostrar a frase);
-//        a semente vai direto para o cofre (src/crypto/vault.js) e k1 é apagada.
-//   k2 — cifra o resto (saídas, histórico, ajustes) a cada gravação. Fica na memória enquanto a
-//        carteira está aberta, mas NÃO abre o bloco secreto.
-// O servidor leve nunca recebe nada disso.
+// Light wallet in the browser: the data stays on the device, ENCRYPTED with AES-256-GCM.
+// The password yields TWO keys (PBKDF2-SHA256, 600,000 iterations via WebCrypto; without a secure
+// context — plain http on a local network — 60,000 in pure JavaScript):
+//   k1 — opens the SECRET block (seed + phrase). Used only to unlock (and to show the phrase);
+//        the seed goes straight into the vault (src/crypto/vault.js) and k1 is wiped.
+//   k2 — encrypts everything else (outputs, history, settings) on every save. It stays in memory
+//        while the wallet is open, but it CANNOT open the secret block.
+// The light server never receives any of this.
 
 import { LightWallet, LightClient } from '../light/wallet.js';
 import { getParams } from '../params.js';
 import { pbkdf2, aesGcmEncrypt, aesGcmDecrypt, randomFill } from '../util/purecrypto.js';
 import * as core from '../crypto/wasm.js';
 
-const INDEX = 'krevo-carteiras';
-const keyOf = (network) => `krevo-carteira-${network}`;
+const INDEX = 'krevo-wallets';
+const keyOf = (network) => `krevo-wallet-${network}`;
+// Earlier versions used Portuguese storage keys (krevo-carteiras, krevo-carteira-<network>): move them once.
+try {
+  const oldIndex = localStorage.getItem('krevo-carteiras');
+  if (oldIndex !== null && localStorage.getItem(INDEX) === null) localStorage.setItem(INDEX, oldIndex);
+  for (const k of Object.keys(localStorage)) {
+    const m = k.match(/^krevo-carteira-(.+)$/);
+    if (!m) continue;
+    if (localStorage.getItem(keyOf(m[1])) === null) localStorage.setItem(keyOf(m[1]), localStorage.getItem(k));
+    localStorage.removeItem(k);
+  }
+  localStorage.removeItem('krevo-carteiras');
+} catch { /* storage unavailable */ }
 const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 const unhex = (s) => Uint8Array.from(s.match(/../g) ?? [], (h) => parseInt(h, 16));
 
-// AES-GCM no núcleo de tempo constante quando houver; senão o JavaScript
+// AES-GCM in the constant-time core when available; otherwise JavaScript
 const enc = (k, iv, d) => (core.available() ? core.aesGcmEncrypt(k, iv, d) : aesGcmEncrypt(k, iv, d));
 const dec = (k, iv, c, t) => (core.available() ? core.aesGcmDecrypt(k, iv, c, t) : aesGcmDecrypt(k, iv, c, t));
 
-/** 64 bytes da senha: k1 = [0, 32) (os 32 primeiros são a chave do formato antigo), k2 = [32, 64). */
+/** 64 bytes from the password: k1 = [0, 32) (the first 32 are the old format's key), k2 = [32, 64). */
 async function deriveKeys(password, saltHex, iterations) {
   const pw = new TextEncoder().encode(password);
   let out;
@@ -39,12 +51,12 @@ function sealBytes(key, bytes) {
 }
 function unsealBytes(key, rec) {
   const all = unhex(rec.ct);
-  try { return new Uint8Array(dec(key, unhex(rec.iv), all.subarray(0, -16), all.subarray(-16))); } catch { throw new Error('senha incorreta'); }
+  try { return new Uint8Array(dec(key, unhex(rec.iv), all.subarray(0, -16), all.subarray(-16))); } catch { throw new Error('wrong password'); }
 }
 const sealJson = (key, obj) => sealBytes(key, new TextEncoder().encode(JSON.stringify(obj)));
 const unsealJson = (key, rec) => JSON.parse(new TextDecoder().decode(unsealBytes(key, rec)));
 
-/** Bloco secreto: semente (32 bytes) ‖ frase (UTF-8). */
+/** Secret block: seed (32 bytes) ‖ phrase (UTF-8). */
 function secretBlob(seedHex, mnemonic) {
   const m = new TextEncoder().encode(mnemonic ?? '');
   const out = new Uint8Array(32 + m.length);
@@ -58,11 +70,11 @@ export class BrowserWallet extends LightWallet {
   get network() { return this.params.name; }
   get serverUrl() { return this._rec.server; }
   save() {
-    if (!this._key) return; // ainda montando
+    if (!this._key) return; // still being set up
     const { iv, ct } = sealJson(this._key, this.data);
     localStorage.setItem(keyOf(this._rec.network), JSON.stringify({ ...this._rec, iv, ct }));
   }
-  /** Um servidor, ou dois separados por vírgula (a carteira compara as respostas). */
+  /** One server, or two separated by a comma (the wallet compares their answers). */
   setServer(url) {
     this._rec.server = url;
     this.rpcUrl = url;
@@ -82,7 +94,7 @@ export class BrowserWallet extends LightWallet {
     const k = await deriveKeys(password, this._rec.salt, this._rec.iter);
     try { return hex(k.k2) === hex(this._key); } finally { k.wipe(); }
   }
-  /** Frase de recuperação: decifrada agora, com a senha (não fica guardada na memória). */
+  /** Recovery phrase: decrypted now, with the password (it is not kept in memory). */
   async revealMnemonic(password) {
     const k = await deriveKeys(password, this._rec.salt, this._rec.iter);
     const blob = unsealBytes(k.k1, this._rec.secret);
@@ -100,16 +112,16 @@ function remember(network, server) {
   localStorage.setItem(INDEX, JSON.stringify(list));
 }
 
-/** Cria (frase nova) ou restaura (frase existente) e guarda cifrada neste aparelho. */
+/** Creates (new phrase) or restores (existing phrase) and stores it encrypted on this device. */
 export async function createWallet({ server, password, mnemonic }) {
-  const info = await new LightClient(server).info(); // descobre a rede e confere que o servidor responde
+  const info = await new LightClient(server).info(); // finds out the network and checks that the server answers
   const params = getParams(info.network);
-  if (localStorage.getItem(keyOf(info.network))) throw new Error(`já existe uma carteira da rede ${info.network} neste navegador`);
+  if (localStorage.getItem(keyOf(info.network))) throw new Error(`a wallet for the ${info.network} network already exists in this browser`);
   const iter = globalThis.crypto?.subtle ? 600_000 : 60_000;
   const rec = { v: 2, network: info.network, server, salt: hex(randomFill(16)), iter, kdf: 'pbkdf2-sha256' };
   const k = await deriveKeys(password, rec.salt, iter);
   const w = BrowserWallet.create(null, params, server, { mnemonic });
-  // semente e frase saem dos dados comuns e vão para o bloco secreto
+  // seed and phrase leave the regular data and go into the secret block
   const blob = secretBlob(w.data.seed, w.data.mnemonic);
   rec.secret = sealBytes(k.k1, blob);
   blob.fill(0);
@@ -124,13 +136,13 @@ export async function createWallet({ server, password, mnemonic }) {
 
 export async function unlockWallet(network, password) {
   const raw = localStorage.getItem(keyOf(network));
-  if (!raw) throw new Error('nenhuma carteira desta rede neste navegador');
+  if (!raw) throw new Error('no wallet for this network in this browser');
   const rec = JSON.parse(raw);
   const k = await deriveKeys(password, rec.salt, rec.iter);
   const meta = { v: 2, network: rec.network, server: rec.server, salt: rec.salt, iter: rec.iter, kdf: rec.kdf };
   let data, blob;
   if (rec.v === 1) {
-    // formato antigo: tudo num bloco só, com a chave k1 → migra para o novo (semente à parte)
+    // old format: everything in one block, under key k1 → migrate to the new one (seed kept apart)
     data = unsealJson(k.k1, rec);
     blob = secretBlob(data.seed, data.mnemonic);
     meta.secret = sealBytes(k.k1, blob);

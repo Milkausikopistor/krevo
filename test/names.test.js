@@ -1,6 +1,6 @@
-// Nomes legíveis (@nome): formato, regras de consenso (compromisso/revelação, taxa, dono,
-// vencimento, carência) e o fluxo completo na carteira (registrar, pagar para @nome, alterar,
-// transferir para um endereço quântico, renovar, liberar).
+// Human-readable names (@name): format, consensus rules (commitment/reveal, fee, owner,
+// expiry, grace period) and the full flow in the wallet (register, pay to @name, update,
+// transfer to a quantum-safe address, renew, release).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -28,30 +28,30 @@ import { nameCommit, nameReveal, nameRevealWait, nameUpdate, nameTransfer, nameR
 const params = getParams('simnet');
 const DEP = params.nameMinDeposit;
 
-test('nomes: sintaxe, taxas por tamanho e formato do registro', () => {
-  assert.equal(normalizeName('  @Padaria '), 'padaria');
-  for (const ok of ['abc', 'padaria-sol', 'loja24', 'a1b', 'x'.repeat(32)]) assert.ok(isValidName(ok), ok);
+test('names: syntax, fees by length and record format', () => {
+  assert.equal(normalizeName('  @Bakery '), 'bakery');
+  for (const ok of ['abc', 'sun-bakery', 'shop24', 'a1b', 'x'.repeat(32)]) assert.ok(isValidName(ok), ok);
   for (const bad of ['ab', '-abc', 'abc-', 'a--b', 'açaí', 'pão', 'ABC', 'a b c', 'x'.repeat(33), 'a_b', 'xn--abc']) assert.equal(isValidName(bad), false, bad);
-  assert.throws(() => checkName('@pão'), /inválido/);
+  assert.throws(() => checkName('@pão'), /invalid name/);
   assert.equal(nameFee(params, 'abc'), 100n * COIN);
   assert.equal(nameFee(params, 'abcd'), 20n * COIN);
   assert.equal(nameFee(params, 'abcde'), 5n * COIN);
-  assert.equal(nameFee(params, 'padaria'), COIN);
+  assert.equal(nameFee(params, 'bakery'), COIN);
   const k = Keys.random();
-  const rec = { name: 'padaria', expiry: 123456, owner: k.tKey(0).lock, target: k.shieldedData };
+  const rec = { name: 'bakery', expiry: 123456, owner: k.tKey(0).lock, target: k.shieldedData };
   const lock = encodeNameRecord(rec);
   assert.deepEqual(parseNameRecord(lock), rec);
   assert.equal(parseAddressData(lock).type, 'n');
-  assert.equal(describeLock(params, lock), '@padaria (registro de nome)');
+  assert.equal(describeLock(params, lock), '@bakery (name record)');
   const salt = Buffer.alloc(32, 7);
-  const w = Buffer.concat([commitWitnessPrefix('padaria', salt, rec.owner), Buffer.alloc(64, 1)]);
+  const w = Buffer.concat([commitWitnessPrefix('bakery', salt, rec.owner), Buffer.alloc(64, 1)]);
   const c = parseCommitWitness(w);
-  assert.equal(c.name, 'padaria');
-  assert.ok(nameCommitHash(c.name, c.salt, c.owner).equals(nameCommitHash('padaria', salt, rec.owner)));
+  assert.equal(c.name, 'bakery');
+  assert.ok(nameCommitHash(c.name, c.salt, c.owner).equals(nameCommitHash('bakery', salt, rec.owner)));
   assert.equal(c.inner.length, 64);
 });
 
-/** Ajudantes para montar as transações de nomes direto no consenso. */
+/** Helpers to build name transactions directly against consensus. */
 function nameKit(c, clock, funder) {
   const daa = () => c.virtual.gd.daaScore;
   const mineN = (n, txs = []) => { for (let i = 0; i < n; i++) mine(c, funder.tKey(0).lock, i === 0 ? txs : [], clock); };
@@ -72,7 +72,7 @@ function nameKit(c, clock, funder) {
       .filter((x) => daa() <= x.r.expiry + params.nameGrace);
     return live[0] ?? null;
   };
-  /** Gasta o registro atual (assinado por `signer`) recriando-o com mudanças. */
+  /** Spends the current record (signed by `signer`) recreating it with changes. */
   const spendRecord = (name, signer, payer, { target, owner, expiry, fee = 0n, release = false } = {}) => {
     const cur = record(name);
     const [txid, index] = cur.key.split(':');
@@ -84,7 +84,7 @@ function nameKit(c, clock, funder) {
   return { daa, mineN, fund, status, commit, reveal, record, spendRecord };
 }
 
-test('consenso: compromisso → revelação, um só dono, taxa para o Fundo, alterar, renovar, vencer', () => {
+test('consensus: commitment → reveal, a single owner, fee to the Fund, update, renew, expire', () => {
   const c = new Consensus(params);
   const clock = new Clock();
   const alice = Keys.random(), bob = Keys.random();
@@ -93,90 +93,90 @@ test('consenso: compromisso → revelação, um só dono, taxa para o Fundo, alt
   const k = nameKit(c, clock, alice);
   const saltA = Buffer.alloc(32, 0xa1), saltB = Buffer.alloc(32, 0xb2);
 
-  // 1) compromisso de Alice; revelar cedo demais é ignorado
-  const cA = k.commit(alice, 'padaria', saltA);
+  // 1) Alice's commitment; revealing too early is ignored
+  const cA = k.commit(alice, 'bakery', saltA);
   k.mineN(1, [cA]);
-  const early = k.reveal(alice, 'padaria', saltA, cA);
+  const early = k.reveal(alice, 'bakery', saltA, cA);
   k.mineN(1, [early]);
-  assert.equal(k.status(early), 'unknown', 'revelação antes do prazo mínimo');
+  assert.equal(k.status(early), 'unknown', 'reveal before the minimum wait');
   k.mineN(params.nameCommitMin);
-  // 2) sem a taxa: recusado; com a taxa: registrado
-  const cheap = k.reveal(alice, 'padaria', saltA, cA, { fee: 0n });
+  // 2) without the fee: rejected; with the fee: registered
+  const cheap = k.reveal(alice, 'bakery', saltA, cA, { fee: 0n });
   k.mineN(1, [cheap]);
-  assert.equal(k.status(cheap), 'unknown', 'registro sem taxa');
-  const ok = k.reveal(alice, 'padaria', saltA, cA);
+  assert.equal(k.status(cheap), 'unknown', 'record without the fee');
+  const ok = k.reveal(alice, 'bakery', saltA, cA);
   k.mineN(2, [ok]);
   assert.equal(k.status(ok), 'accepted');
-  let rec = k.record('padaria');
+  let rec = k.record('bakery');
   assert.ok(rec.r.owner.equals(alice.tKey(0).lock));
   assert.ok(rec.r.target.equals(alice.shieldedData));
-  // a taxa foi inteira para o Fundo de Segurança (não para o minerador)
+  // the whole fee went to the Security Fund (not to the miner)
   const nameFees = [...c.acc.values()].reduce((a, x) => a + (x.nameFees ?? 0n), 0n);
-  assert.equal(nameFees, nameFee(params, 'padaria'));
+  assert.equal(nameFees, nameFee(params, 'bakery'));
 
-  // 3) Bob não consegue registrar o mesmo nome, mesmo com compromisso maduro
-  const cB = k.commit(bob, 'padaria', saltB);
+  // 3) Bob cannot register the same name, even with a mature commitment
+  const cB = k.commit(bob, 'bakery', saltB);
   k.mineN(1 + params.nameCommitMin, [cB]);
-  const steal = k.reveal(bob, 'padaria', saltB, cB);
+  const steal = k.reveal(bob, 'bakery', saltB, cB);
   k.mineN(1, [steal]);
-  assert.equal(k.status(steal), 'unknown', 'nome já tem dono');
-  // ...nem mexer no registro de Alice
-  const hijack = k.spendRecord('padaria', bob, bob, { target: bob.shieldedData });
+  assert.equal(k.status(steal), 'unknown', 'the name already has an owner');
+  // ...nor touch Alice's record
+  const hijack = k.spendRecord('bakery', bob, bob, { target: bob.shieldedData });
   k.mineN(1, [hijack]);
-  assert.equal(k.status(hijack), 'unknown', 'só o dono altera');
+  assert.equal(k.status(hijack), 'unknown', 'only the owner updates');
 
-  // 4) Alice muda o destino (sem taxa) — mas não pode esticar o prazo sem pagar
-  const upd = k.spendRecord('padaria', alice, alice, { target: alice.tKey(0).lock });
+  // 4) Alice changes the destination (no fee) — but cannot stretch the expiry without paying
+  const upd = k.spendRecord('bakery', alice, alice, { target: alice.tKey(0).lock });
   k.mineN(1, [upd]);
   assert.equal(k.status(upd), 'accepted');
-  assert.ok(k.record('padaria').r.target.equals(alice.tKey(0).lock));
-  const stretch = k.spendRecord('padaria', alice, alice, { expiry: k.record('padaria').r.expiry + 50 });
+  assert.ok(k.record('bakery').r.target.equals(alice.tKey(0).lock));
+  const stretch = k.spendRecord('bakery', alice, alice, { expiry: k.record('bakery').r.expiry + 50 });
   k.mineN(1, [stretch]);
-  assert.equal(k.status(stretch), 'unknown', 'esticar o vencimento sem taxa');
-  const oldExpiry = k.record('padaria').r.expiry;
-  const renew = k.spendRecord('padaria', alice, alice, { expiry: oldExpiry + 100, fee: nameFee(params, 'padaria') });
+  assert.equal(k.status(stretch), 'unknown', 'stretching the expiry without the fee');
+  const oldExpiry = k.record('bakery').r.expiry;
+  const renew = k.spendRecord('bakery', alice, alice, { expiry: oldExpiry + 100, fee: nameFee(params, 'bakery') });
   k.mineN(1, [renew]);
-  assert.equal(k.status(renew), 'accepted', 'renovação paga');
-  rec = k.record('padaria');
+  assert.equal(k.status(renew), 'accepted', 'paid renewal');
+  rec = k.record('bakery');
   assert.equal(rec.r.expiry, oldExpiry + 100);
 
-  // 5) vencido, mas na carência: só a dona pode renovar; Bob ainda não registra
+  // 5) expired, but in the grace period: only the owner can renew; Bob cannot register yet
   k.mineN(rec.r.expiry - k.daa() + 2);
   assert.ok(k.daa() > rec.r.expiry);
-  const cB2 = k.commit(bob, 'padaria', Buffer.alloc(32, 0xb3));
+  const cB2 = k.commit(bob, 'bakery', Buffer.alloc(32, 0xb3));
   k.mineN(1 + params.nameCommitMin, [cB2]);
-  const graceSteal = k.reveal(bob, 'padaria', Buffer.alloc(32, 0xb3), cB2);
+  const graceSteal = k.reveal(bob, 'bakery', Buffer.alloc(32, 0xb3), cB2);
   k.mineN(1, [graceSteal]);
-  assert.equal(k.status(graceSteal), 'unknown', 'carência protege a dona');
-  const noFee = k.spendRecord('padaria', alice, alice, { target: alice.shieldedData });
+  assert.equal(k.status(graceSteal), 'unknown', 'the grace period protects the owner');
+  const noFee = k.spendRecord('bakery', alice, alice, { target: alice.shieldedData });
   k.mineN(1, [noFee]);
-  assert.equal(k.status(noFee), 'unknown', 'na carência, alterar sem renovar não vale');
+  assert.equal(k.status(noFee), 'unknown', 'in the grace period, updating without renewing does not count');
 
-  // 6) depois da carência o nome fica livre: Bob registra; a dona antiga recupera o depósito
+  // 6) after the grace period the name is free: Bob registers; the former owner gets the deposit back
   k.mineN(rec.r.expiry + params.nameGrace - k.daa() + 2);
-  const cB3 = k.commit(bob, 'padaria', Buffer.alloc(32, 0xb4));
+  const cB3 = k.commit(bob, 'bakery', Buffer.alloc(32, 0xb4));
   k.mineN(1 + params.nameCommitMin, [cB3]);
-  const bobReg = k.reveal(bob, 'padaria', Buffer.alloc(32, 0xb4), cB3);
+  const bobReg = k.reveal(bob, 'bakery', Buffer.alloc(32, 0xb4), cB3);
   k.mineN(1, [bobReg]);
-  assert.equal(k.status(bobReg), 'accepted', 'nome livre de novo');
-  assert.ok(k.record('padaria').r.owner.equals(bob.tKey(0).lock));
-  const dead = c.virtual.view.nameEntries('padaria').find((x) => parseNameRecord(x.e.lock).owner.equals(alice.tKey(0).lock));
+  assert.equal(k.status(bobReg), 'accepted', 'name free again');
+  assert.ok(k.record('bakery').r.owner.equals(bob.tKey(0).lock));
+  const dead = c.virtual.view.nameEntries('bakery').find((x) => parseNameRecord(x.e.lock).owner.equals(alice.tKey(0).lock));
   const [dtxid, dix] = dead.key.split(':');
   const refund = buildTransaction({ params, tInputs: [{ outpoint: { txid: Buffer.from(dtxid, 'hex'), index: Number(dix) }, amount: dead.e.amount, signer: alice.tKey(0).signer }], sweep: { type: 't', lock: alice.tKey(0).lock } }).tx;
   k.mineN(1, [refund]);
-  assert.equal(k.status(refund), 'accepted', 'depósito volta para a antiga dona');
-  assert.ok(k.record('padaria').r.owner.equals(bob.tKey(0).lock), 'e o nome continua de Bob');
+  assert.equal(k.status(refund), 'accepted', 'the deposit goes back to the former owner');
+  assert.ok(k.record('bakery').r.owner.equals(bob.tKey(0).lock), 'and the name stays with Bob');
 });
 
-test('consenso: dois registros na mesma transação, dono inválido e minerador com trava de nome são recusados', () => {
+test('consensus: two records in the same transaction, an invalid owner and a miner with a name lock are rejected', () => {
   const k = Keys.random();
-  const r1 = encodeNameRecord({ name: 'loja-um', expiry: 999, owner: k.tKey(0).lock, target: k.shieldedData });
-  const r2 = encodeNameRecord({ name: 'loja-dois', expiry: 999, owner: k.tKey(0).lock, target: k.shieldedData });
+  const r1 = encodeNameRecord({ name: 'shop-one', expiry: 999, owner: k.tKey(0).lock, target: k.shieldedData });
+  const r2 = encodeNameRecord({ name: 'shop-two', expiry: 999, owner: k.tKey(0).lock, target: k.shieldedData });
   const base = (outs) => buildTransaction({ params, tInputs: [{ outpoint: { txid: Buffer.alloc(32, 1), index: 0 }, amount: 10n * COIN, signer: k.tKey(0).signer }], outputs: outs, change: { type: 't', lock: k.tKey(0).lock } }).tx;
-  assert.throws(() => validateTxStateless(base([{ type: 't', lock: r1, amount: DEP }, { type: 't', lock: r2, amount: DEP }]), params), /um registro de nome/);
-  const privOwner = encodeNameRecord({ name: 'loja-tres', expiry: 999, owner: k.shieldedData, target: k.shieldedData });
-  assert.throws(() => validateTxStateless(base([{ type: 't', lock: privOwner, amount: DEP }]), params), /dono de um nome/);
-  // um minerador não pode criar registros pela coinbase
+  assert.throws(() => validateTxStateless(base([{ type: 't', lock: r1, amount: DEP }, { type: 't', lock: r2, amount: DEP }]), params), /one name record/);
+  const privOwner = encodeNameRecord({ name: 'shop-three', expiry: 999, owner: k.shieldedData, target: k.shieldedData });
+  assert.throws(() => validateTxStateless(base([{ type: 't', lock: privOwner, amount: DEP }]), params), /owner of a name/);
+  // a miner cannot create records through the coinbase
   const c = new Consensus(params);
   assert.throws(() => mine(c, r1, [], new Clock()));
 });
@@ -191,7 +191,7 @@ async function mineVia(url, address, n) {
   }
 }
 
-test('carteira na rede: registrar @padaria, pagar para @padaria, alterar, transferir para krq, renovar, liberar', async () => {
+test('wallet on the network: register @bakery, pay to @bakery, update, transfer to krq, renew, release', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-names-'));
   const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
@@ -206,58 +206,58 @@ test('carteira na rede: registrar @padaria, pagar para @padaria, alterar, transf
     await mineVia(url, miner, 12);
     const mineN = (n = 1) => mineVia(url, miner, n);
 
-    // registro em duas etapas
-    const c1 = await nameCommit(alice, '@Padaria', { target: 'privado' });
-    assert.equal(c1.name, 'padaria');
+    // two-step registration
+    const c1 = await nameCommit(alice, '@Bakery', { target: 'private' });
+    assert.equal(c1.name, 'bakery');
     assert.equal(c1.nameFee, COIN);
-    await assert.rejects(() => nameReveal(alice, 'padaria'), /confirmado|aguarde/);
+    await assert.rejects(() => nameReveal(alice, 'bakery'), /confirmed|wait/);
     await mineN(1);
-    await assert.rejects(() => nameReveal(alice, 'padaria'), /aguarde/);
+    await assert.rejects(() => nameReveal(alice, 'bakery'), /wait/);
     await mineN(params.nameCommitMin);
-    assert.equal(await nameRevealWait(alice, 'padaria'), 0);
-    await nameReveal(alice, 'padaria');
+    assert.equal(await nameRevealWait(alice, 'bakery'), 0);
+    await nameReveal(alice, 'bakery');
     await mineN(1);
-    let info = await alice.resolveName('@padaria');
-    assert.equal(info.status, 'ativo');
-    assert.equal(info.target, alice.sAddress, 'aponta para o endereço privado de Alice');
+    let info = await alice.resolveName('@bakery');
+    assert.equal(info.status, 'active');
+    assert.equal(info.target, alice.sAddress, 'points to Alice\'s private address');
     assert.equal(info.owner, alice.tAddress);
 
-    // Bob paga para @padaria — o pagamento vai para o endereço privado de Alice
-    const pay = await bob.send({ to: '@padaria', amount: COIN });
-    assert.equal(pay.name, 'padaria');
+    // Bob pays to @bakery — the payment goes to Alice's private address
+    const pay = await bob.send({ to: '@bakery', amount: COIN });
+    assert.equal(pay.name, 'bakery');
     assert.equal(pay.to, alice.sAddress);
     await mineN(1);
     await alice.sync();
     const b = alice.balance();
-    assert.ok(b.shielded + b.shieldedImmature >= COIN, 'Alice recebeu no privado');
+    assert.ok(b.shielded + b.shieldedImmature >= COIN, 'Alice received it as private');
 
-    // nome ocupado; só a dona altera
-    await assert.rejects(() => nameCommit(bob, 'padaria'), /já tem dono/);
-    await assert.rejects(() => nameUpdate(bob, 'padaria', 'privado'), /não pertence/);
-    await nameUpdate(alice, 'padaria', 'transparente');
+    // name taken; only the owner updates
+    await assert.rejects(() => nameCommit(bob, 'bakery'), /already has an owner/);
+    await assert.rejects(() => nameUpdate(bob, 'bakery', 'private'), /does not belong/);
+    await nameUpdate(alice, 'bakery', 'transparent');
     await mineN(1);
-    assert.equal((await alice.resolveName('padaria')).target, alice.tAddress);
+    assert.equal((await alice.resolveName('bakery')).target, alice.tAddress);
 
-    // transferência para o endereço QUÂNTICO de Bob; Bob renova assinando com Schnorr + ML-DSA
-    await nameTransfer(alice, 'padaria', bob.qAddress);
+    // transfer to Bob's QUANTUM-SAFE address; Bob renews signing with Schnorr + ML-DSA
+    await nameTransfer(alice, 'bakery', bob.qAddress);
     await mineN(1);
-    info = await bob.resolveName('padaria');
+    info = await bob.resolveName('bakery');
     assert.equal(info.owner, bob.qAddress);
     const before = info.expiry;
-    const rn = await nameRenew(bob, 'padaria');
+    const rn = await nameRenew(bob, 'bakery');
     assert.equal(rn.nameFee, COIN);
     await mineN(1);
-    assert.ok((await bob.resolveName('padaria')).expiry > before, 'renovado');
-    assert.deepEqual((await myNames(bob)).map((x) => x.name), ['padaria']);
+    assert.ok((await bob.resolveName('bakery')).expiry > before, 'renewed');
+    assert.deepEqual((await myNames(bob)).map((x) => x.name), ['bakery']);
     assert.equal((await myNames(alice)).length, 0);
     const gi = await rpc(url, 'getinfo');
     assert.equal(gi.names, 1);
 
-    // Bob libera o nome: o depósito volta e o nome fica livre
-    await nameRelease(bob, 'padaria');
+    // Bob releases the name: the deposit comes back and the name is free
+    await nameRelease(bob, 'bakery');
     await mineN(1);
-    assert.equal((await bob.resolveName('padaria')).status, 'livre');
-    await assert.rejects(() => alice.send({ to: '@padaria', amount: COIN }), /não está registrado/);
+    assert.equal((await bob.resolveName('bakery')).status, 'free');
+    await assert.rejects(() => alice.send({ to: '@bakery', amount: COIN }), /is not registered/);
   } finally {
     await node.stop();
   }

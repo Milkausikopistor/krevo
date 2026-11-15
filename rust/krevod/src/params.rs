@@ -1,5 +1,5 @@
-//! Parâmetros de consenso (idênticos a src/params.js). Mudar qualquer valor cria uma rede
-//! incompatível.
+//! Consensus parameters (identical to src/params.js). Changing any value creates an
+//! incompatible network.
 
 pub const COIN: u64 = 100_000_000;
 pub const MAX_SUPPLY: u64 = 1_000_000_000 * COIN;
@@ -60,7 +60,7 @@ pub struct Params {
     pub genesis_message: &'static str,
 }
 
-/// k do GHOSTDAG: o menor k com P[Poisson(2Dλ) > k] < δ (mesma conta do JavaScript).
+/// GHOSTDAG k: the smallest k with P[Poisson(2Dλ) > k] < δ (same computation as JavaScript).
 pub fn compute_ghostdag_k(bps: f64, delay_seconds: f64, delta: f64) -> usize {
     let mean = 2.0 * delay_seconds * bps;
     let mut term = (-mean).exp();
@@ -134,7 +134,7 @@ pub fn get_params(name: &str) -> Option<Params> {
             let mut p = common("mainnet");
             p.p2p_magic = 0x4b525631; p.default_p2p_port = 16110; p.default_rpc_port = 16111;
             p.genesis_timestamp = 1798761600000; p.genesis_bits = 0x1f00ffff;
-            p.genesis_message = "Krevo mainnet — PREENCHER NO LANÇAMENTO";
+            p.genesis_message = "Krevo mainnet — TO BE SET AT LAUNCH";
             p
         }
         "testnet" => {
@@ -170,16 +170,16 @@ pub fn get_params(name: &str) -> Option<Params> {
     Some(p)
 }
 
-/// Formatação igual à do JavaScript ("1.234,5 KRV").
+/// Formatting identical to JavaScript's ("1,234.5 KRV").
 pub fn format_krv(grains: u64) -> String {
     let whole = grains / COIN;
     let frac = format!("{:08}", grains % COIN);
     let frac = frac.trim_end_matches('0');
     let mut w = whole.to_string();
     let mut out = String::new();
-    while w.len() > 3 { out = format!(".{}{}", &w[w.len() - 3..], out); w.truncate(w.len() - 3); }
+    while w.len() > 3 { out = format!(",{}{}", &w[w.len() - 3..], out); w.truncate(w.len() - 3); }
     out = format!("{w}{out}");
-    if frac.is_empty() { format!("{out} KRV") } else { format!("{out},{frac} KRV") }
+    if frac.is_empty() { format!("{out} KRV") } else { format!("{out}.{frac} KRV") }
 }
 
 #[cfg(test)]
@@ -189,7 +189,7 @@ mod tests {
     fn k_is_124() { assert_eq!(compute_ghostdag_k(10.0, 5.0, 0.01), 124); }
 }
 
-/// Nós-semente da rede (seeds/<rede>.txt na raiz do repositório, embutido na compilação).
+/// Seed nodes of the network (seeds/<network>.txt at the repository root, embedded at build time).
 pub fn seeds(name: &str) -> Vec<String> {
     let text = match name {
         "testnet" => include_str!("../../../seeds/testnet.txt"),

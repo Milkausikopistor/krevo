@@ -1,20 +1,20 @@
-// Regras de validade das transações.
+// Transaction validity rules.
 //
-// validateTxStateless — independe do estado (estrutura, limites, provas de intervalo).
-// validateTxInContext — contra uma visão UTXO (existência, maturidade, gasto duplo,
-//                        assinaturas, assinaturas em anel, balanço).
+// validateTxStateless — independent of the state (structure, limits, range proofs).
+// validateTxInContext — against a UTXO view (existence, maturity, double spends,
+//                        signatures, ring signatures, balance).
 //
-// Regra de balanço (vale para QUALQUER mistura transparente/privada):
-//   E = Σ pseudo_compromissos + (Σ entradas_transparentes)·H
-//       − Σ compromissos_de_saída − (Σ saídas_transparentes + taxa)·H
-// Sem partes privadas: exige-se E = 0 numericamente.
-// Com partes privadas: E precisa ser k·G e o remetente prova conhecer k com uma
-// assinatura Schnorr ("assinatura de balanço"). Como ninguém conhece log_G(H),
-// isso só é possível se os VALORES se cancelam exatamente — sem criar moeda.
+// Balance rule (applies to ANY transparent/private mix):
+//   E = Σ pseudo_commitments + (Σ transparent_inputs)·H
+//       − Σ output_commitments − (Σ transparent_outputs + fee)·H
+// Without private parts: E = 0 is required numerically.
+// With private parts: E must be k·G and the sender proves knowledge of k with a Schnorr
+// signature (the "balance signature"). Since nobody knows log_G(H), this is only possible
+// if the AMOUNTS cancel out exactly — no coins are created.
 //
-// Nomes (@nome, src/consensus/names.js): no máximo um registro por transação; um nome só
-// pode ter um registro vivo; registrar exige revelar um compromisso maduro e pagar a taxa;
-// renovar exige a taxa; alterar/transferir exige a assinatura do dono (que gasta o registro).
+// Names (@name, src/consensus/names.js): at most one record per transaction; a name can only
+// have one live record; registering requires revealing a mature commitment and paying the fee;
+// renewing requires the fee; updating/transferring requires the owner's signature (who spends the record).
 
 import { MAX_SUPPLY } from '../params.js';
 import { Point, INF, sumPoints } from '../crypto/secp256k1.js';
@@ -34,17 +34,17 @@ import { toHex } from '../util/bytes.js';
 export class TxRuleError extends Error {}
 const fail = (m) => { throw new TxRuleError(m); };
 
-// Caches de verificação criptográfica (os dados referenciados por um outpoint são
-// imutáveis — o txid compromete as saídas —, então o resultado é determinístico).
+// Cryptographic verification caches (the data referenced by an outpoint are immutable — the
+// txid commits to the outputs — so the result is deterministic).
 const rangeOk = new Set();
 const cryptoOk = new Set();
 function remember(set, k) { if (set.size > 100_000) set.clear(); set.add(k); }
 
-const OWNER_TYPES = new Set(['t', 'm', 'q']); // quem pode ser dono de um nome (travas gastáveis)
+const OWNER_TYPES = new Set(['t', 'm', 'q']); // who can own a name (spendable locks)
 
 /**
- * Registro de nome e compromisso são gastos com a testemunha do DONO. Devolve
- * { lock, witness, commit? } com a trava e a testemunha "de dentro", ou null se não conferir.
+ * Name records and commitments are spent with the OWNER's witness. Returns
+ * { lock, witness, commit? } with the "inner" lock and witness, or null if it does not match.
  */
 function unwrapSpend(lock, witness) {
   if (lock[0] === LOCK_NAME) {
@@ -58,121 +58,121 @@ function unwrapSpend(lock, witness) {
   return { lock, witness };
 }
 
-/** Regras dos nomes. Devolve a taxa de nome paga (vai inteira para o Fundo de Segurança). */
+/** Name rules. Returns the name fee paid (it all goes to the Security Fund). */
 function checkNameRules(tx, view, povDaa, params, inners, entries) {
   const out = tx.tOut.find((o) => o.lock[0] === LOCK_NAME);
   if (!out) return 0n;
   const rec = parseNameRecord(out.lock);
   const fee = nameFee(params, rec.name);
-  if (out.amount < params.nameMinDeposit) fail(`o registro de um nome precisa guardar ao menos ${params.nameMinDeposit} grãos de depósito`);
-  if (rec.expiry <= povDaa) fail('vencimento do nome no passado (renove pagando a taxa)');
+  if (out.amount < params.nameMinDeposit) fail(`a name record must hold a deposit of at least ${params.nameMinDeposit} grains`);
+  if (rec.expiry <= povDaa) fail('name expiry in the past (renew by paying the fee)');
   const spent = new Set(tx.tIn.map((i) => outpointKey(i.outpoint.txid, i.outpoint.index)));
   let prev = null;
   for (const { key, e } of view.nameEntries(rec.name)) {
     const r = parseNameRecord(e.lock);
-    if (povDaa > r.expiry + params.nameGrace) continue; // passou da carência: não vale mais
-    if (!spent.has(key)) fail(`@${rec.name} já tem dono`);
+    if (povDaa > r.expiry + params.nameGrace) continue; // past the grace period: no longer valid
+    if (!spent.has(key)) fail(`@${rec.name} already has an owner`);
     prev = r;
   }
   if (prev) {
-    // o dono (cuja assinatura é exigida para gastar o registro) altera, transfere ou renova
+    // the owner (whose signature is required to spend the record) updates, transfers or renews
     if (rec.expiry <= prev.expiry) return 0n;
-    if (tx.fee < fee) fail(`renovar @${rec.name} custa ${fee} grãos`);
-    if (rec.expiry > Math.max(prev.expiry, povDaa) + params.namePeriod) fail('renovação além de um período');
+    if (tx.fee < fee) fail(`renewing @${rec.name} costs ${fee} grains`);
+    if (rec.expiry > Math.max(prev.expiry, povDaa) + params.namePeriod) fail('renewal beyond one period');
     return fee;
   }
-  if (tx.fee < fee) fail(`registrar @${rec.name} custa ${fee} grãos`);
-  if (rec.expiry > povDaa + params.namePeriod) fail('registro além de um período');
+  if (tx.fee < fee) fail(`registering @${rec.name} costs ${fee} grains`);
+  if (rec.expiry > povDaa + params.namePeriod) fail('registration beyond one period');
   const ok = inners.some((u, n) => u.commit && u.commit.name === rec.name && u.commit.owner.equals(rec.owner)
     && povDaa - entries[n].daa >= params.nameCommitMin && povDaa - entries[n].daa <= params.nameCommitMax);
-  if (!ok) fail(`registrar @${rec.name} exige revelar um compromisso feito entre ${params.nameCommitMin} e ${params.nameCommitMax} blocos atrás`);
+  if (!ok) fail(`registering @${rec.name} requires revealing a commitment made between ${params.nameCommitMin} and ${params.nameCommitMax} blocks ago`);
   return fee;
 }
 
 export function validateTxStateless(tx, params) {
-  if (tx.version !== 1) fail('versão de transação desconhecida');
-  if (tx.isCoinbase()) fail('transação sem entradas');
-  if (tx.tOut.length + tx.sOut.length === 0) fail('transação sem saídas');
-  if (tx.payload.length > params.maxTxPayload) fail('payload grande demais');
-  if (tx.fee > MAX_SUPPLY) fail('taxa inválida');
+  if (tx.version !== 1) fail('unknown transaction version');
+  if (tx.isCoinbase()) fail('transaction without inputs');
+  if (tx.tOut.length + tx.sOut.length === 0) fail('transaction without outputs');
+  if (tx.payload.length > params.maxTxPayload) fail('payload too large');
+  if (tx.fee > MAX_SUPPLY) fail('invalid fee');
   const seen = new Set();
   for (const i of tx.tIn) {
     const k = outpointKey(i.outpoint.txid, i.outpoint.index);
-    if (seen.has(k)) fail('entrada duplicada');
+    if (seen.has(k)) fail('duplicate input');
     seen.add(k);
   }
   const kis = new Set();
   for (const si of tx.sIn) {
     if (!si.ring.length) {
-      // prova de pertencimento à cadeia inteira contra a árvore com as `anchor` primeiras saídas
-      if (!Number.isSafeInteger(si.anchor) || si.anchor < 1) fail('âncora de entrada privada inválida');
-      if (!si.fcmp || si.fcmp.length !== fcmpProofSize(si.anchor, params.fcmpBranch)) fail('prova de pertencimento com tamanho inválido');
+      // full-chain membership proof against the tree of the first `anchor` outputs
+      if (!Number.isSafeInteger(si.anchor) || si.anchor < 1) fail('invalid private input anchor');
+      if (!si.fcmp || si.fcmp.length !== fcmpProofSize(si.anchor, params.fcmpBranch)) fail('membership proof with invalid size');
     } else {
-      if (!params.ringInputs) fail('assinaturas em anel não são aceitas nesta rede: a entrada privada precisa provar pertencer à árvore de TODAS as saídas (FCMP)');
-      if (si.ring.length !== params.ringSize) fail(`anel deve ter ${params.ringSize} membros`);
+      if (!params.ringInputs) fail('ring signatures are not accepted on this network: the private input must prove it belongs to the tree of ALL outputs (FCMP)');
+      if (si.ring.length !== params.ringSize) fail(`the ring must have ${params.ringSize} members`);
       const members = new Set(si.ring.map((m) => outpointKey(m.txid, m.index)));
-      if (members.size !== si.ring.length) fail('membro de anel repetido');
-      if (si.clsag.length !== clsagSize(si.ring.length)) fail('assinatura em anel com tamanho inválido');
+      if (members.size !== si.ring.length) fail('repeated ring member');
+      if (si.clsag.length !== clsagSize(si.ring.length)) fail('ring signature with invalid size');
     }
     const ki = toHex(si.keyImage);
-    if (kis.has(ki)) fail('imagem de chave repetida na transação');
+    if (kis.has(ki)) fail('key image repeated in the transaction');
     kis.add(ki);
-    try { Point.fromBytes(si.pseudo); Point.fromBytes(si.keyImage); } catch { fail('ponto inválido em entrada privada'); }
+    try { Point.fromBytes(si.pseudo); Point.fromBytes(si.keyImage); } catch { fail('invalid point in private input'); }
   }
   let outSum = 0n, nameOuts = 0;
   for (const o of tx.tOut) {
-    if (o.amount < 1n || o.amount > MAX_SUPPLY) fail('valor de saída inválido');
+    if (o.amount < 1n || o.amount > MAX_SUPPLY) fail('invalid output amount');
     outSum += o.amount;
     let a;
-    try { a = parseAddressData(o.lock); } catch { fail('trava de saída inválida'); }
-    if (a.type === 's') fail('trava de saída inválida');
+    try { a = parseAddressData(o.lock); } catch { fail('invalid output lock'); }
+    if (a.type === 's') fail('invalid output lock');
     if (a.type === 'n') {
       nameOuts++;
       let owner, target;
-      try { owner = parseAddressData(a.record.owner); target = parseAddressData(a.record.target); } catch { fail('registro de nome com dono ou destino inválido'); }
-      if (!OWNER_TYPES.has(owner.type)) fail('o dono de um nome precisa ser um endereço krv, krq ou de multiassinatura');
-      if (!['t', 's', 'm', 'q'].includes(target.type)) fail('destino de nome inválido');
+      try { owner = parseAddressData(a.record.owner); target = parseAddressData(a.record.target); } catch { fail('name record with invalid owner or destination'); }
+      if (!OWNER_TYPES.has(owner.type)) fail('the owner of a name must be a krv, krq or multisig address');
+      if (!['t', 's', 'm', 'q'].includes(target.type)) fail('invalid name destination');
     }
   }
-  if (nameOuts > 1) fail('no máximo um registro de nome por transação');
-  if (outSum + tx.fee > MAX_SUPPLY) fail('soma de saídas acima da oferta máxima');
+  if (nameOuts > 1) fail('at most one name record per transaction');
+  if (outSum + tx.fee > MAX_SUPPLY) fail('sum of outputs above the maximum supply');
   const hasShielded = tx.sIn.length > 0 || tx.sOut.length > 0;
   if (tx.sOut.length) {
-    if (tx.sOut.length > MAX_AGGREGATION) fail('saídas privadas demais');
-    if (tx.rangeProof.length !== rangeProofSize(tx.sOut.length)) fail('prova de intervalo com tamanho inválido');
+    if (tx.sOut.length > MAX_AGGREGATION) fail('too many private outputs');
+    if (tx.rangeProof.length !== rangeProofSize(tx.sOut.length)) fail('range proof with invalid size');
     let Cs;
     try { Cs = tx.sOut.map((o) => { Point.fromBytes(o.R); Point.fromBytes(o.P); return Point.fromBytes(o.C); }); }
-    catch { fail('ponto inválido em saída privada'); }
+    catch { fail('invalid point in private output'); }
     const key = tx.hashHex;
     if (!rangeOk.has(key)) {
-      if (!verifyRange(Cs, tx.rangeProof)) fail('prova de intervalo inválida');
+      if (!verifyRange(Cs, tx.rangeProof)) fail('invalid range proof');
       remember(rangeOk, key);
     }
-  } else if (tx.rangeProof.length) fail('prova de intervalo sem saídas privadas');
-  if (hasShielded !== !!tx.bindingSig) fail('assinatura de balanço ausente ou indevida');
+  } else if (tx.rangeProof.length) fail('range proof without private outputs');
+  if (hasShielded !== !!tx.bindingSig) fail('balance signature missing or unexpected');
   const cm = computeMass(tx, params);
-  if (tx.mass < cm) fail(`massa declarada (${tx.mass}) menor que a de computação (${cm})`);
-  if (tx.mass > params.maxTxMass) fail('transação pesada demais');
+  if (tx.mass < cm) fail(`declared mass (${tx.mass}) below the compute mass (${cm})`);
+  if (tx.mass > params.maxTxMass) fail('transaction too heavy');
 }
 
 /**
- * Valida contra a visão UTXO. Retorna { fee } ou lança TxRuleError.
- * povDaa = daaScore do ponto de vista (bloco que aceita a transação).
+ * Validates against the UTXO view. Returns { fee } or throws TxRuleError.
+ * povDaa = daaScore of the point of view (the block that accepts the transaction).
  */
 export function validateTxInContext(tx, view, povDaa, params) {
   const tInAmounts = [];
   const inners = [], entries = [];
   for (const i of tx.tIn) {
     const e = view.getT(outpointKey(i.outpoint.txid, i.outpoint.index));
-    if (!e) fail('entrada inexistente ou já gasta');
-    if (e.coinbase && povDaa - e.daa < params.coinbaseMaturity) fail('coinbase imatura');
+    if (!e) fail('input does not exist or is already spent');
+    if (e.coinbase && povDaa - e.daa < params.coinbaseMaturity) fail('immature coinbase');
     const u = unwrapSpend(e.lock, i.sig);
-    if (!u) fail('testemunha não confere com a saída (compromisso de nome errado?)');
+    if (!u) fail('witness does not match the output (wrong name commitment?)');
     if (u.lock[0] === LOCK_MULTISIG) {
-      // bloqueio por tempo relativo: checado sempre (depende do momento, não só da transação)
+      // relative time lock: always checked (it depends on the moment, not only on the transaction)
       const delay = witnessDelay(u.witness);
-      if (delay === null) fail('testemunha de multiassinatura malformada');
-      if (povDaa - e.daa < delay) fail(`bloqueado por tempo: faltam ${delay - (povDaa - e.daa)} blocos`);
+      if (delay === null) fail('malformed multisig witness');
+      if (povDaa - e.daa < delay) fail(`time-locked: ${delay - (povDaa - e.daa)} blocks to go`);
     }
     tInAmounts.push(e.amount);
     inners.push(u);
@@ -180,34 +180,34 @@ export function validateTxInContext(tx, view, povDaa, params) {
   }
   const rings = [];
   for (const si of tx.sIn) {
-    if (view.hasKI(toHex(si.keyImage))) fail('gasto duplo (imagem de chave já usada)');
+    if (view.hasKI(toHex(si.keyImage))) fail('double spend (key image already used)');
     if (!si.ring.length) {
-      // A âncora precisa estar no estado do pai selecionado (a ordem global é a da cadeia
-      // selecionada) e ser madura: TODAS as saídas da árvore escolhida já podem ser gastas.
+      // The anchor must be in the selected parent's state (the global order is the selected
+      // chain's) and mature: EVERY output of the chosen tree can already be spent.
       const base = view.base;
-      if (si.anchor > base.sList.length) fail('âncora além das saídas privadas conhecidas');
+      if (si.anchor > base.sList.length) fail('anchor beyond the known private outputs');
       const last = base.s.get(base.sList[si.anchor - 1]);
-      if (povDaa - last.daa < params.fcmpMaturity) fail(`âncora recente demais: use uma árvore com ao menos ${params.fcmpMaturity} blocos`);
+      if (povDaa - last.daa < params.fcmpMaturity) fail(`anchor too recent: use a tree at least ${params.fcmpMaturity} blocks old`);
       rings.push(null);
       continue;
     }
     const ring = [];
     for (const m of si.ring) {
       const e = view.getS(outpointKey(m.txid, m.index));
-      if (!e) fail('membro de anel inexistente');
+      if (!e) fail('nonexistent ring member');
       const need = e.coinbase ? Math.max(params.ringMaturity, params.coinbaseMaturity) : params.ringMaturity;
-      if (povDaa - e.daa < need) fail('membro de anel imaturo');
+      if (povDaa - e.daa < need) fail('immature ring member');
       ring.push(e);
     }
     rings.push(ring);
   }
-  if (storageMass(tx, tInAmounts, params) > tx.mass) fail('massa de armazenamento acima da declarada');
+  if (storageMass(tx, tInAmounts, params) > tx.mass) fail('storage mass above the declared one');
   const nameFeePaid = checkNameRules(tx, view, povDaa, params, inners, entries);
 
   const tIn = tInAmounts.reduce((a, b) => a + b, 0n);
   const tOut = tx.tOut.reduce((a, o) => a + o.amount, 0n);
   const hasShielded = tx.sIn.length > 0 || tx.sOut.length > 0;
-  if (!hasShielded && tIn !== tOut + tx.fee) fail('entradas ≠ saídas + taxa');
+  if (!hasShielded && tIn !== tOut + tx.fee) fail('inputs ≠ outputs + fee');
 
   const key = tx.hashHex;
   if (!cryptoOk.has(key)) {
@@ -215,14 +215,14 @@ export function validateTxInContext(tx, view, povDaa, params) {
     tx.tIn.forEach((i, n) => {
       const { lock: inner, witness } = inners[n];
       let lock;
-      try { lock = parseAddressData(inner); } catch { fail('trava não gastável'); }
+      try { lock = parseAddressData(inner); } catch { fail('unspendable lock'); }
       if (lock.type === 'm') {
-        if (!verifyMultisigWitness(lock.data, witness, msg)) fail('multiassinatura inválida (faltam assinaturas ou alguma não confere)');
+        if (!verifyMultisigWitness(lock.data, witness, msg)) fail('invalid multisig (missing signatures or one does not match)');
       } else if (lock.type === 'q') {
-        if (!verifyPqWitness(lock.data, witness, msg)) fail('assinatura híbrida quântica inválida (Schnorr e ML-DSA precisam conferir)');
+        if (!verifyPqWitness(lock.data, witness, msg)) fail('invalid quantum-safe hybrid signature (both Schnorr and ML-DSA must match)');
       } else if (lock.type === 't') {
-        if (witness.length !== 64 || !schnorrVerify(lock.pubkey, msg, witness)) fail('assinatura inválida');
-      } else fail('esta saída não pode ser gasta');
+        if (witness.length !== 64 || !schnorrVerify(lock.pubkey, msg, witness)) fail('invalid signature');
+      } else fail('this output cannot be spent');
     });
     const pseudos = [];
     const batch = newFcmpBatch();
@@ -233,20 +233,20 @@ export function validateTxInContext(tx, view, povDaa, params) {
       if (!si.ring.length) {
         try {
           fcmpVerifyInto(batch, { branch: params.fcmpBranch, N: si.anchor, root: view.base.tree.root(si.anchor), proof: si.fcmp, keyImage: Point.fromBytes(si.keyImage), pseudo, msg });
-        } catch (e) { fail('prova de pertencimento inválida (' + e.message + ')'); }
+        } catch (e) { fail('invalid membership proof (' + e.message + ')'); }
         fcmps++;
         return;
       }
       const ring = rings[n].map((e) => ({ P: Point.fromBytes(e.P), C: Point.fromBytes(e.C) }));
       const sig = decodeClsag(si.clsag, si.ring.length, Point.fromBytes(si.keyImage));
-      if (!clsagVerify(msg, ring, pseudo, sig)) fail('assinatura em anel inválida');
+      if (!clsagVerify(msg, ring, pseudo, sig)) fail('invalid ring signature');
     });
-    // todas as provas de pertencimento da transação numa única multiexponenciação por curva
-    if (fcmps && !(batch.e1.check() && batch.e2.check())) fail('prova de pertencimento inválida');
+    // all membership proofs of the transaction in a single multi-exponentiation per curve
+    if (fcmps && !(batch.e1.check() && batch.e2.check())) fail('invalid membership proof');
     if (hasShielded) {
       const outC = sumPoints(tx.sOut.map((o) => Point.fromBytes(o.C)));
       const E = sumPoints(pseudos).add(mulH(tIn)).sub(outC).sub(mulH(tOut + tx.fee));
-      if (E.isInf() || !schnorrVerify(E, msg, tx.bindingSig, 'binding')) fail('balanço inválido');
+      if (E.isInf() || !schnorrVerify(E, msg, tx.bindingSig, 'binding')) fail('invalid balance');
     }
     remember(cryptoOk, key);
   }
@@ -254,11 +254,11 @@ export function validateTxInContext(tx, view, povDaa, params) {
 }
 
 /**
- * Quanto uma transação muda o saldo do pool privado (catraca, como o ZIP-209 do Zcash).
- * Calculado só com valores PÚBLICOS: (entradas transparentes) − (saídas transparentes + taxa).
- *   > 0  → moedas entraram no pool privado (blindagem)
- *   < 0  → moedas saíram do pool privado (desblindagem)
- * Transações puramente transparentes não tocam no pool (delta 0).
+ * How much a transaction changes the balance of the private pool (turnstile, like Zcash's ZIP-209).
+ * Computed only from PUBLIC values: (transparent inputs) − (transparent outputs + fee).
+ *   > 0  → coins entered the private pool (shielding)
+ *   < 0  → coins left the private pool (unshielding)
+ * Purely transparent transactions do not touch the pool (delta 0).
  */
 export function shieldedDelta(tx, tInSum) {
   if (!tx.sIn.length && !tx.sOut.length) return 0n;

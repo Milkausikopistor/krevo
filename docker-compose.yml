@@ -1,59 +1,59 @@
-# Pilha de um operador da testnet pública (exemplo; ajuste ao seu servidor).
-#   docker compose up -d                                   # nó + servidor leve + explorador + app web
-#   ENDERECO_MINERACAO=krvtest1… docker compose --profile minerar up -d
-#   KREVO_SENHA=… docker compose --profile torneira up -d    (depois de criar e abastecer a carteira)
-# Ponha HTTPS na frente (Caddy, nginx…) para o app web, o servidor leve e a torneira.
-# O RPC do nó (16211) fica só na rede interna do Docker: não o exponha na Internet.
-# Guia completo: docs/TESTNET.md
+# Stack of a public testnet operator (an example; adjust it to your server).
+#   docker compose up -d                                       # node + light server + explorer + web app
+#   MINING_ADDRESS=krvtest1… docker compose --profile mine up -d
+#   KREVO_PASSWORD=… docker compose --profile faucet up -d       (after creating and funding the wallet)
+# Put HTTPS in front (Caddy, nginx…) of the web app, the light server and the faucet.
+# The node's RPC (16211) stays on Docker's internal network only: do not expose it to the Internet.
+# Full guide: docs/TESTNET.md
 
 services:
-  no:
+  node:
     build: .
-    # nó em Rust (mais rápido); para o nó JavaScript de referência, troque por:
-    #   entrypoint: ["node", "src/cli.js"]   (e o mesmo command)
+    # Rust node (faster); for the JavaScript reference node, replace it with:
+    #   entrypoint: ["node", "src/cli.js"]   (and the same command)
     entrypoint: ["krevod"]
-    command: ["no", "--rede", "testnet", "--dados", "/dados", "--rpchost", "0.0.0.0"]
-    volumes: ["dados:/dados"]
+    command: ["node", "--network", "testnet", "--datadir", "/data", "--rpchost", "0.0.0.0"]
+    volumes: ["data:/data"]
     ports: ["16210:16210"]
     restart: unless-stopped
 
-  servidor-leve:
+  light-server:
     build: .
-    command: ["servidor-leve", "--rede", "testnet", "--rpc", "http://no:16211", "--publico"]
+    command: ["light-server", "--network", "testnet", "--rpc", "http://node:16211", "--public"]
     ports: ["8090:8090"]
-    depends_on: [no]
+    depends_on: [node]
     restart: unless-stopped
 
-  explorador:
+  explorer:
     build: .
-    command: ["explorador", "--rede", "testnet", "--rpc", "http://no:16211", "--publico"]
+    command: ["explorer", "--network", "testnet", "--rpc", "http://node:16211", "--public"]
     ports: ["8080:8080"]
-    depends_on: [no]
+    depends_on: [node]
     restart: unless-stopped
 
-  carteira-web:
+  web-wallet:
     build: .
-    command: ["carteira-web", "--publico"]
+    command: ["web-wallet", "--public"]
     ports: ["8091:8091"]
     restart: unless-stopped
 
-  minerador:
+  miner:
     build: .
-    profiles: ["minerar"]
-    command: ["minerar", "--rede", "testnet", "--rpc", "http://no:16211", "--endereco", "${ENDERECO_MINERACAO:?defina ENDERECO_MINERACAO}"]
-    depends_on: [no]
+    profiles: ["mine"]
+    command: ["mine", "--network", "testnet", "--rpc", "http://node:16211", "--address", "${MINING_ADDRESS:?set MINING_ADDRESS}"]
+    depends_on: [node]
     restart: unless-stopped
 
-  torneira:
+  faucet:
     build: .
-    profiles: ["torneira"]
-    command: ["torneira", "--rede", "testnet", "--rpc", "http://no:16211", "--arquivo", "/carteira/carteira-torneira-testnet.json", "--publico", "--proxy-confiavel"]
-    environment: ["KREVO_SENHA"]
-    volumes: ["torneira:/carteira"]
+    profiles: ["faucet"]
+    command: ["faucet", "--network", "testnet", "--rpc", "http://node:16211", "--file", "/wallet/faucet-wallet-testnet.json", "--public", "--trusted-proxy"]
+    environment: ["KREVO_PASSWORD"]
+    volumes: ["faucet:/wallet"]
     ports: ["8092:8092"]
-    depends_on: [no]
+    depends_on: [node]
     restart: unless-stopped
 
 volumes:
-  dados: {}
-  torneira: {}
+  data: {}
+  faucet: {}

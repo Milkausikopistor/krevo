@@ -1,16 +1,16 @@
-// GHOSTDAG (Sompolinsky, Wyborski, Zohar) — o protocolo de consenso do Kaspa.
+// GHOSTDAG (Sompolinsky, Wyborski, Zohar) — Kaspa's consensus protocol.
 //
-// No Bitcoin, dois blocos simultâneos → um vira órfão (trabalho desperdiçado).
-// No BlockDAG, cada bloco referencia TODAS as pontas conhecidas, e nada é
-// descartado. O GHOSTDAG colore os blocos:
-//   AZUIS  — o maior conjunto "bem conectado" (cada um tem ≤ k blocos azuis
-//            em sua anticone): blocos de mineradores honestos.
-//   VERMELHOS — blocos com conexão fraca (atrasados ou de um atacante).
-// A cadeia selecionada (pai com mais trabalho azul) + o "mergeset" de cada bloco
-// definem uma ORDEM TOTAL de todos os blocos — e portanto das transações.
-// Com k = 124 a 10 blocos/s, a segurança equivale à do Nakamoto com atraso de 5 s.
+// In Bitcoin, two simultaneous blocks → one becomes an orphan (wasted work).
+// In a BlockDAG, each block references ALL known tips, and nothing is discarded.
+// GHOSTDAG colors the blocks:
+//   BLUE  — the largest "well-connected" set (each one has ≤ k blue blocks in its
+//           anticone): blocks from honest miners.
+//   RED   — weakly connected blocks (late, or from an attacker).
+// The selected chain (parent with the most blue work) + each block's "mergeset" define a
+// TOTAL ORDER of all blocks — and therefore of the transactions.
+// With k = 124 at 10 blocks/s, security matches Nakamoto's with a 5 s delay.
 //
-// Implementação baseada no algoritmo de referência do rusty-kaspa
+// Implementation based on rusty-kaspa's reference algorithm
 // (consensus/src/processes/ghostdag/protocol.rs).
 
 export function compareBlueWork(storeOrGet, a, b) {
@@ -19,7 +19,7 @@ export function compareBlueWork(storeOrGet, a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** Armazém mínimo do DAG: pais, filhos, altura, dados GHOSTDAG e trabalho. */
+/** Minimal DAG store: parents, children, height, GHOSTDAG data and work. */
 export class DagStore {
   constructor() {
     this.parents = new Map();
@@ -38,7 +38,7 @@ export class DagStore {
     this.gd.set(h, gd);
     this.work.set(h, work);
   }
-  /** a ∈ passado(b) ∪ {b}? Busca reversa limitada pela altura (a ancestral tem altura menor). */
+  /** a ∈ past(b) ∪ {b}? Reverse search bounded by height (an ancestor has a lower height). */
   isAncestor(a, b) {
     if (a === b) return true;
     const ha = this.height.get(a), hb = this.height.get(b);
@@ -78,7 +78,7 @@ export class Ghostdag {
     return best;
   }
 
-  /** Blocos no passado de B mas não no passado do pai selecionado, em ordem crescente de trabalho azul. */
+  /** Blocks in B's past but not in the selected parent's past, in increasing blue-work order. */
   orderedMergesetWithoutSP(sp, parents) {
     const queue = parents.filter((p) => p !== sp);
     const mergeset = new Set(queue);
@@ -100,7 +100,7 @@ export class Ghostdag {
     for (;;) {
       const s = cur.bluesAnticoneSizes.get(block);
       if (s !== undefined) return s;
-      if (!cur.selectedParent) throw new Error('bloco fora do conjunto azul do contexto');
+      if (!cur.selectedParent) throw new Error('block outside the context\'s blue set');
       cur = this.store.gd.get(cur.selectedParent);
     }
   }
@@ -128,7 +128,7 @@ export class Ghostdag {
     }
   }
 
-  /** Calcula os dados GHOSTDAG de um novo bloco com estes pais. */
+  /** Computes the GHOSTDAG data of a new block with these parents. */
   run(parents) {
     const sp = this.selectedParent(parents);
     const spData = this.store.gd.get(sp);
@@ -155,10 +155,10 @@ export class Ghostdag {
     for (const b of data.mergesetBlues) added += this.store.work.get(b);
     data.blueWork = spData.blueWork + added;
     data.daaScore = spData.daaScore + data.mergesetBlues.length + data.mergesetReds.length;
-    data.mergesetAsc = mergeset; // mergeset sem o pai selecionado, ordem crescente
+    data.mergesetAsc = mergeset; // mergeset without the selected parent, ascending order
     return data;
   }
 
-  /** Ordem de consenso das transações: pai selecionado, depois o mergeset em ordem crescente. */
+  /** Consensus order of transactions: selected parent, then the mergeset in ascending order. */
   consensusOrder(gd) { return [gd.selectedParent, ...gd.mergesetAsc]; }
 }

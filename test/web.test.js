@@ -1,6 +1,6 @@
-// A carteira do app web, rodando com as MESMAS peças do navegador (Buffer e criptografia em JS
-// puro, sem node:crypto) contra um nó real + servidor leve: restaura pela frase, varre, verifica
-// provas com PoW, lê o memo cifrado e gasta no privado.
+// The web app's wallet, running with the SAME pieces as the browser (Buffer and pure-JS
+// cryptography, without node:crypto) against a real node + light server: restores from the phrase, scans, verifies
+// proofs with PoW, reads the encrypted memo and spends as private.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -36,7 +36,7 @@ async function mineVia(url, address, n) {
   }
 }
 
-test('carteira web (peças do navegador): restaura, varre, prova, lê memo e gasta', async () => {
+test('web wallet (browser pieces): restores, scans, proves, reads the memo and spends', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-web-'));
   const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
@@ -46,33 +46,33 @@ test('carteira web (peças do navegador): restaura, varre, prova, lê memo e gas
   try {
     const alice = Wallet.create(path.join(dir, 'alice.json'), params, url);
     const phrase = generateMnemonic(24);
-    const web = Wallet.create(path.join(dir, 'web.json'), params, url, { mnemonic: phrase }); // só para saber o endereço
+    const web = Wallet.create(path.join(dir, 'web.json'), params, url, { mnemonic: phrase }); // only to learn the address
     const miner = Keys.random();
     await mineVia(url, alice.tAddress, 30);
     await mineVia(url, miner.sAddress(params), 40);
-    const p = await alice.send({ to: web.sAddress, amount: 3n * COIN, from: 'transparente', memo: 'café ☕' });
+    const p = await alice.send({ to: web.sAddress, amount: 3n * COIN, from: 'transparent', memo: 'café ☕' });
     await mineVia(url, miner.tAddress(params), params.lightProofDepth + 6);
     assert.equal((await rpc(url, 'gettransactionstatus', { txid: p.txid })).status, 'accepted');
 
     const client = (...extra) => run(process.execPath, ['--import', pathToFileURL(path.join(here, 'browser', 'register.mjs')).href, path.join(here, 'browser', 'client.mjs'), ls.url, 'simnet', phrase, ...extra], { timeout: 300_000 });
     const r1 = JSON.parse((await client()).stdout);
-    assert.ok(r1.env.webBuffer, 'rodou com o Buffer do app web');
-    assert.equal(r1.address, web.sAddress, 'a frase gera o mesmo endereço com a criptografia do navegador');
-    assert.equal(r1.balance.shielded, (3n * COIN).toString(), 'saldo privado provado');
-    assert.deepEqual(r1.memos, ['café ☕'], 'memo decifrado com o AES-GCM em JS puro');
+    assert.ok(r1.env.webBuffer, 'ran with the web app\'s Buffer');
+    assert.equal(r1.address, web.sAddress, 'the phrase produces the same address with the browser\'s cryptography');
+    assert.equal(r1.balance.shielded, (3n * COIN).toString(), 'private balance proven');
+    assert.deepEqual(r1.memos, ['café ☕'], 'memo decrypted with the pure-JS AES-GCM');
 
-    const r2 = JSON.parse((await client(alice.tAddress, String(COIN), 'privado')).stdout);
-    assert.ok(r2.sent?.txid, 'transação montada no "navegador"');
+    const r2 = JSON.parse((await client(alice.tAddress, String(COIN), 'private')).stdout);
+    assert.ok(r2.sent?.txid, 'transaction built in the "browser"');
     await mineVia(url, miner.tAddress(params), 1);
-    assert.equal((await rpc(url, 'gettransactionstatus', { txid: r2.sent.txid })).status, 'accepted', 'a rede aceitou (anel CLSAG + Bulletproofs feitos em JS puro)');
-    // gasto privado com prova contra a árvore inteira, também só com as peças do navegador
+    assert.equal((await rpc(url, 'gettransactionstatus', { txid: r2.sent.txid })).status, 'accepted', 'the network accepted it (CLSAG ring + Bulletproofs made in pure JS)');
+    // private spend with a proof against the whole tree, also with just the browser pieces
     await mineVia(url, miner.tAddress(params), params.fcmpMaturity + params.lightProofDepth + 3);
-    const r3 = JSON.parse((await client(alice.tAddress, String(COIN / 2n), 'privado', 'fcmp')).stdout);
+    const r3 = JSON.parse((await client(alice.tAddress, String(COIN / 2n), 'private', 'fcmp')).stdout);
     await mineVia(url, miner.tAddress(params), 1);
-    assert.equal((await rpc(url, 'gettransactionstatus', { txid: r3.sent.txid })).status, 'accepted', 'a rede aceitou a prova de pertencimento feita em JS puro');
+    assert.equal((await rpc(url, 'gettransactionstatus', { txid: r3.sent.txid })).status, 'accepted', 'the network accepted the membership proof made in pure JS');
     const raw3 = Transaction.deserialize(fromHex((await rpc(url, 'gettransaction', { txid: r3.sent.txid })).tx));
-    assert.ok(raw3.sIn.length && raw3.sIn.every((i) => i.ring.length === 0), 'sem anel');
-    console.log(`    sincronização no "navegador": ${r1.syncMs} ms, ${r1.sync.bytes} B; gasto FCMP sem threads: prova em ${(r3.sent.proveMs / 1000).toFixed(1)} s, ${r3.sent.anonymitySet} saídas`);
+    assert.ok(raw3.sIn.length && raw3.sIn.every((i) => i.ring.length === 0), 'no ring');
+    console.log(`    sync in the "browser": ${r1.syncMs} ms, ${r1.sync.bytes} B; FCMP spend without threads: proof in ${(r3.sent.proveMs / 1000).toFixed(1)} s, ${r3.sent.anonymitySet} outputs`);
   } finally {
     await ls.close();
     await node.stop();

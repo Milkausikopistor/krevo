@@ -1,5 +1,10 @@
 # Krevo (KRV)
 
+[![tests](https://github.com/Milkausikopistor/krevo/actions/workflows/ci.yml/badge.svg)](https://github.com/Milkausikopistor/krevo/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/Milkausikopistor/krevo?include_prereleases&label=release)](https://github.com/Milkausikopistor/krevo/releases)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![help wanted](https://img.shields.io/github/issues/Milkausikopistor/krevo/help%20wanted?label=help%20wanted&color=7c3aed)](https://github.com/Milkausikopistor/krevo/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
+
 A **proof-of-work** cryptocurrency on a **BlockDAG (GHOSTDAG, Kaspa's technology)**, with
 **per-transaction optional privacy** in which every private spend hides among **all private outputs
 the network has ever created** (full-chain membership proofs on a curve tree), **10 blocks per second**, sub-second confirmation, fees of a
@@ -12,6 +17,22 @@ fraction of a cent, a **hard cap of 1 billion coins**, **zero premine**, **quant
 
 > ⚠️ **Reference implementation, not audited.** It is meant for testing, studying and evolving the
 > protocol on a test network. **Do not use it with real money.** See section 8 of the whitepaper.
+
+## Download
+Ready-to-run packages are on the **[Releases page](https://github.com/Milkausikopistor/krevo/releases)**:
+
+| File | What it is |
+|---|---|
+| `krevo-<version>.zip` / `.tar.gz` | The whole project: JavaScript node, wallet CLI, web/phone wallet, block explorer, mining pool, faucet. Unpack it and run it with **Node.js 24.7+** — nothing to install (zero npm dependencies). |
+| `krevod-<version>-<platform>` | The Rust full node for Linux (x86_64, arm64), macOS (Apple silicon, Intel) and Windows. Also the wallets' fast native prover. |
+| `ghcr.io/milkausikopistor/krevo` | Docker image with every tool plus `krevod` (see [docker-compose.yml](docker-compose.yml)). |
+
+```bash
+# after unpacking krevo-<version>.zip:
+cd krevo-<version>
+node scripts/web-demo.js            # a local network + the web wallet → http://127.0.0.1:8091
+node src/cli.js --help              # every command
+```
 
 ## Project status and how to help
 Krevo is published **as-is**: there is no company, no foundation, no funded team and no
@@ -52,7 +73,7 @@ In separate terminals:
 ```bash
 # 1. create a wallet: prints a 24-word recovery phrase (write it down on paper!),
 #    a transparent krvdev1… address and a private krsdev1… address
-node src/cli.js wallet create --password mySecret   # later commands ask for it (hidden) or read KREVO_SENHA
+node src/cli.js wallet create --password mySecret   # later commands ask for it (hidden) or read KREVO_PASSWORD
 
 # 2. start a node
 node src/cli.js node --network devnet --datadir ./data
@@ -86,7 +107,7 @@ cd rust/krevod && cargo build --release
 node src/cli.js mine --address krvdev1… --rpc http://127.0.0.1:16321
 node src/cli.js wallet send --to krsdev1… --amount 2 --from private --rpc http://127.0.0.1:16321
 node src/cli.js light-server --rpc http://127.0.0.1:16321      # and the explorer: explorer --rpc …
-./target/release/krevod replay --network devnet --file ./data/devnet/blocos.dat   # re-validate a block file
+./target/release/krevod replay --network devnet --file ./data/devnet/blocks.dat   # re-validate a block file
 ```
 * **What is inside:** its own Montgomery arithmetic for both curves of the secp256k1/secq256k1 cycle,
   GHOSTDAG and the difficulty adjustment, KrevoHash, emission, mass, the UTXO state with MuHash
@@ -115,7 +136,7 @@ node src/cli.js light-server --rpc http://127.0.0.1:16321      # and the explore
     and the block explorer running on top of it (`vectors/restart.mjs`).
 * **Speed** (same machine): re-validating the 1,051-block devnet chain takes 1.8 s (JavaScript: 11 s);
   the 28 test chains 4.0 s (21.6 s); verifying one full-chain membership proof ~0.13–0.19 s (~1 s).
-* **Native prover for wallets:** `krevod provar` (`prove`) computes the two circuit Bulletproofs of each
+* **Native prover for wallets:** `krevod prove` computes the two circuit Bulletproofs of each
   private input — the expensive part of a full-chain proof — one thread per half. The JavaScript
   wallets use it automatically when the binary exists (`rust/krevod/target/release` or `…/debug`, or
   `KREVO_PROVER=/path/to/krevod`); otherwise they use the same Rust code compiled to WebAssembly (next
@@ -169,7 +190,7 @@ module ships with the repository (`node rust/krevo-wasm/build.mjs` rebuilds it, 
   sealed with AES-256-GCM under a key derived from the seed inside the vault; files are written
   atomically with owner-only permissions (0600); the phrase is decrypted only when asked for
   (`wallet phrase`). `--password` is no longer needed on the command line (shell history, process
-  list): the CLI asks for it without echo, or reads `KREVO_SENHA`.
+  list): the CLI asks for it without echo, or reads `KREVO_PASSWORD`.
 * **The browser wallet:** the password now yields two keys — one opens the secret block (seed + phrase)
   only at unlock and is wiped; the other seals the rest at each save and cannot open the secret block.
   Old browser wallets migrate on the next unlock.
@@ -192,7 +213,7 @@ module ships with the repository (`node rust/krevo-wasm/build.mjs` rebuilds it, 
   random bytes) become errors and the module keeps working.
 * **Faster, too:** a full-chain proof without the native binary takes ~10 s in WebAssembly instead of
   ~18 s in pure JavaScript (one input, sequential, as in browsers); in Node.js the two halves run in
-  WebAssembly threads. Prover order: native `krevod provar` → WebAssembly → JavaScript.
+  WebAssembly threads. Prover order: native `krevod prove` → WebAssembly → JavaScript.
 * **ML-DSA in the browser:** quantum-safe signatures used to need OpenSSL; the core brings them to the
   browser (the app's screens don't offer `krq` addresses yet).
 * **Fallback:** if WebAssembly is unavailable (or `KREVO_NO_WASM=1`), the JavaScript code takes over —
@@ -225,7 +246,7 @@ selection left for statistics to attack.
 * The transaction names its **anchor** (the tree of the first N outputs, at least 100 s old so every
   coin in it is mature). Wallets download their part of the tree mixed with 7 decoy parts, from a node
   or a light server.
-* Cost: proving takes ~2 s per transaction with the native Rust prover (`krevod provar`, used
+* Cost: proving takes ~2 s per transaction with the native Rust prover (`krevod prove`, used
   automatically when built), ~7–10 s with the Rust core in WebAssembly (the default otherwise, browsers
   included) and ~11–18 s in pure JavaScript; verifying takes ~1 s per input in JavaScript
   and ~0.15 s in the Rust node; fee ~0.0003 KRV per input. Because every node verifies before relaying, a private payment
@@ -252,10 +273,10 @@ A web explorer served by `node src/cli.js explorer` (it reads any node through i
 * **Address pages:** balance and history for transparent and multisig/inheritance addresses. Looking
   up a private address shows nothing, by design.
 * **Search** by block hash, txid or address, and a **JSON API** under `/api/` (`info`, `dag`,
-  `bloco/<hash>`, `tx/<txid>`, `endereco/<address>`, `painel`).
+  `block/<hash>`, `tx/<txid>`, `address/<address>`, `name/<name>`, `panel`).
 
-Static snapshots from a demo run are in [docs/explorador-exemplo/](docs/explorador-exemplo/)
-(the page text is in Portuguese, like the CLI messages).
+Static snapshots from a demo run are in [docs/explorer-example/](docs/explorer-example/)
+(regenerate them with `node scripts/examples.js`).
 
 ## Mining pool
 Small miners can combine their hashing power and get paid steadily instead of waiting for luck.
@@ -278,12 +299,12 @@ node src/cli.js mine --pool POOL_HOST:5555 --address krs1… --threads 4 --worke
   many small rewards, so each round uses several transactions (≤ ~140 inputs each, partial payments
   when needed) and consolidates small coins when they pile up.
 * **Stats page** at the web port (pool power, miners, blocks, balances, payments) plus a JSON API
-  (`/api/stats`, `/api/minerador/<address>`). State survives restarts.
+  (`/api/stats`, `/api/miner/<address>`). State survives restarts.
 
 In a local test with real CPU mining, a miner with 2 threads and another with 1 were paid at a
 1.98 : 1 ratio (≈ their 2 : 1 power), the private-address miner received privately, and the amounts
 in both wallets matched the pool's records to the last grain. Example page:
-[docs/pool-exemplo.html](docs/pool-exemplo.html).
+[docs/pool-example.html](docs/pool-example.html).
 
 ## Recovery phrase
 Every new wallet gets a standard **BIP-39** recovery phrase of 24 words (the same standard used by
@@ -320,8 +341,8 @@ node src/cli.js wallet check-proof --proof krpdev1... --address krsdev1... --mes
 Memos to transparent addresses are refused, because they would be public. Payment proofs need the
 wallet file that sent the payment (the per-transaction secret is stored there); a wallet restored from
 its recovery phrase can't prove payments made before the restore.
-Every command also has a Portuguese form (`no`, `minerar`, `carteira enviar --para --valor`, …), and
-the program's messages are currently in Portuguese.
+The project started in Portuguese: the original command and option names (`no`, `minerar`,
+`carteira enviar --para --valor`, …) are still accepted as aliases, so older scripts keep working.
 
 ## Layout
 ```
@@ -559,7 +580,7 @@ installed as an app (PWA). Try the whole thing locally:
 ```bash
 node scripts/web-demo.js
 # app:      http://127.0.0.1:8091        (devnet node, miners and a light server start too)
-# test KRV: http://127.0.0.1:8092/?para=YOUR_ADDRESS   (a faucet that sends 10 KRV)
+# test KRV: http://127.0.0.1:8092/?to=YOUR_ADDRESS   (a faucet that sends 10 KRV)
 ```
 Or serve just the app (`node src/cli.js web-wallet --port 8091`) and point it to any light server.
 * **Create or restore** with the 24-word phrase (the app makes you confirm three words), choose a
@@ -639,7 +660,7 @@ node src/cli.js wallet pay --uri "krevo:krs1…?amount=3.75&memo=KRV-0TBWFR&labe
   mistake. Expired requests (`--expires`, in minutes) are refused by the payer's wallet.
 * The QR generator is built in (no dependencies), supports all 40 versions and 4 error-correction
   levels, and was checked against an independent decoder (jsQR). An example is in
-  [docs/exemplo-cobranca.svg](docs/exemplo-cobranca.svg).
+  [docs/payment-request-example.svg](docs/payment-request-example.svg).
 
 ## Addresses
 | Prefix | Type |

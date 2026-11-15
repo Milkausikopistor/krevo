@@ -1,6 +1,6 @@
-// Buffer para o navegador: subclasse de Uint8Array com os métodos do Node.js que o código da
-// carteira usa (conferido método a método contra o Buffer do Node em test/purecrypto.test.js).
-// Como no Node, subarray() e slice() devolvem VISÕES dos mesmos bytes.
+// Buffer for the browser: a Uint8Array subclass with the Node.js methods the wallet code uses
+// (checked method by method against Node's Buffer in test/purecrypto.test.js).
+// As in Node, subarray() and slice() return VIEWS of the same bytes.
 
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -12,7 +12,7 @@ export class Buffer extends Uint8Array {
     if (ArrayBuffer.isView(x)) { const b = new Buffer(x.byteLength); b.set(new Uint8Array(x.buffer, x.byteOffset, x.byteLength)); return b; }
     if (Array.isArray(x)) { const b = new Buffer(x.length); for (let i = 0; i < x.length; i++) b[i] = x[i] & 255; return b; }
     if (x && x.type === 'Buffer' && Array.isArray(x.data)) return Buffer.from(x.data);
-    throw new TypeError('Buffer.from: tipo não suportado');
+    throw new TypeError('Buffer.from: unsupported type');
   }
   static _fromString(s, encoding = 'utf8') {
     switch (String(encoding).toLowerCase()) {
@@ -21,7 +21,7 @@ export class Buffer extends Uint8Array {
         let i = 0;
         for (; i < n; i++) {
           const v = parseInt(s.substr(2 * i, 2), 16);
-          if (Number.isNaN(v) || !/^[0-9a-fA-F]{2}$/.test(s.substr(2 * i, 2))) break; // como o Node: para no primeiro inválido
+          if (Number.isNaN(v) || !/^[0-9a-fA-F]{2}$/.test(s.substr(2 * i, 2))) break; // like Node: stops at the first invalid pair
           b[i] = v;
         }
         return i === n ? b : b.subarray(0, i);
@@ -33,7 +33,7 @@ export class Buffer extends Uint8Array {
         return b;
       }
       case 'base64': return Buffer._fromString(atob(s.replace(/[^A-Za-z0-9+/=]/g, '')), 'latin1');
-      default: throw new TypeError(`codificação desconhecida: ${encoding}`);
+      default: throw new TypeError(`unknown encoding: ${encoding}`);
     }
   }
   static alloc(n, fill) {
@@ -70,7 +70,7 @@ export class Buffer extends Uint8Array {
       case 'ascii': { let s = ''; for (let i = 0; i < v.length; i++) s += String.fromCharCode(v[i] & 0x7f); return s; }
       case 'latin1': case 'binary': { let s = ''; for (let i = 0; i < v.length; i++) s += String.fromCharCode(v[i]); return s; }
       case 'base64': return btoa(v.toString('latin1'));
-      default: throw new TypeError(`codificação desconhecida: ${encoding}`);
+      default: throw new TypeError(`unknown encoding: ${encoding}`);
     }
   }
   toJSON() { return { type: 'Buffer', data: Array.from(this) }; }
@@ -104,5 +104,5 @@ export class Buffer extends Uint8Array {
   writeBigUInt64BE(v, o = 0) { this._dv().setBigUint64(o, BigInt(v), false); return o + 8; }
 }
 
-/** Instala como global (no navegador ainda não existe). */
+/** Installs it as a global (browsers do not have it). */
 export function installBuffer() { if (!globalThis.Buffer) globalThis.Buffer = Buffer; }

@@ -1,9 +1,9 @@
-//! Nó completo: consenso + mempool + P2P + RPC + armazenamento (espelha node.js e p2p.js).
+//! Full node: consensus + mempool + P2P + RPC + storage (mirrors node.js and p2p.js).
 //!
-//! P2P: TCP com mensagens [magia u32][tamanho u32][JSON] — o mesmo protocolo do nó JavaScript,
-//! então nós Rust e JavaScript formam uma única rede. Sincronização do DAG por inventário;
-//! blocos com pais desconhecidos viram órfãos e os pais são pedidos ao mesmo par.
-//! Dandelion++: transação nova anda pela "haste" (um par por vez) antes de "florescer".
+//! P2P: TCP with [magic u32][length u32][JSON] messages — the same protocol as the JavaScript node,
+//! so Rust and JavaScript nodes form a single network. DAG synchronization by inventory;
+//! blocks with unknown parents become orphans and the parents are requested from the same peer.
+//! Dandelion++: a new transaction walks along the "stem" (one peer at a time) before it "fluffs".
 
 use crate::block::Block;
 use crate::bytes::{from_hex, from_hex32, to_hex};
@@ -62,13 +62,13 @@ pub fn log(m: &str) {
     eprintln!("[{:02}:{:02}:{:02}] {m}", t / 3_600_000, t / 60_000 % 60, t / 1000 % 60);
 }
 
-/// Trava o estado do nó. Se alguma thread entrou em pânico segurando a trava, segue com o
-/// estado (como o nó JavaScript, que captura a exceção e continua): um par hostil não
-/// consegue derrubar o nó inteiro "envenenando" a trava.
+/// Locks the node state. If some thread panicked while holding the lock, it carries on with the
+/// state (like the JavaScript node, which catches the exception and continues): a hostile peer
+/// cannot bring the whole node down by "poisoning" the lock.
 pub fn lock_node(m: &Mutex<Node>) -> MutexGuard<'_, Node> { m.lock().unwrap_or_else(|e| e.into_inner()) }
 
-/// Roda `f` capturando pânicos — defesa em profundidade: um erro de programação disparado por
-/// dados hostis vira um erro comum (o par é desconectado), não a queda do nó.
+/// Runs `f` catching panics — defense in depth: a programming error triggered by
+/// hostile data becomes an ordinary error (the peer is disconnected), not a node crash.
 pub fn guarded<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(r) => r,
@@ -78,7 +78,7 @@ pub fn guarded<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
         }
     }
 }
-pub const INTERNAL: &str = "falha interna";
+pub const INTERNAL: &str = "internal failure";
 
 impl Node {
     pub fn new(params: Params, storage: Option<BlockFile>, port: u16, rpc_host: String, rpc_port: u16) -> Self {
@@ -98,26 +98,26 @@ impl Node {
         (self.rng >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    /// Recarrega os blocos do disco (mesmo arquivo do nó JavaScript).
+    /// Reloads the blocks from disk (the same file as the JavaScript node).
     pub fn load(&mut self) {
         let Some(st) = &self.storage else { return };
         let t = now_ms();
         let blocks = st.read_all();
         let mut n = 0;
         for b in blocks { if let AddResult::Accepted { .. } = self.c.add_block(b, now_ms(), true) { n += 1; } }
-        if n > 0 { log(&format!("{n} blocos recarregados do disco em {:.1} s", (now_ms() - t) as f64 / 1000.0)); }
+        if n > 0 { log(&format!("{n} blocks reloaded from disk in {:.1} s", (now_ms() - t) as f64 / 1000.0)); }
         self.after_change();
     }
 
     fn after_change(&mut self) {
-        for (h, r) in std::mem::take(&mut self.c.disqualified) { log(&format!("bloco {} desqualificado: {r}", &to_hex(&h)[..12])); }
+        for (h, r) in std::mem::take(&mut self.c.disqualified) { log(&format!("block {} disqualified: {r}", &to_hex(&h)[..12])); }
         let mut mp = std::mem::replace(&mut self.mempool, Mempool::new());
         mp.revalidate(&mut self.c);
         self.mempool = mp;
     }
 
-    // ------------------------------------------------------------ blocos
-    /// Bloco vindo da rede ou do RPC: (status, hash, motivo).
+    // ------------------------------------------------------------ blocks
+    /// Block from the network or from RPC: (status, hash, reason).
     pub fn receive_block(&mut self, block: Block, peer: Option<u64>) -> (String, Hash, Option<String>) {
         let res = self.c.add_block(block.clone(), now_ms(), false);
         let out = match res {
@@ -136,7 +136,7 @@ impl Node {
             }
             AddResult::Future(hash) => { self.future.insert(hash, (block, peer)); ("future".to_string(), hash, None) }
             AddResult::Invalid { hash, reason } => {
-                log(&format!("bloco inválido {}: {reason}", &to_hex(&hash)[..12]));
+                log(&format!("invalid block {}: {reason}", &to_hex(&hash)[..12]));
                 if let Some(p) = peer { self.misbehave(p, 50, &reason); }
                 ("invalid".to_string(), hash, Some(reason))
             }
@@ -148,7 +148,7 @@ impl Node {
 
     fn on_accepted(&mut self, hash: &Hash, peer: Option<u64>) {
         if let Some(st) = &self.storage {
-            if let Err(e) = st.append(&self.c.blocks[hash]) { log(&format!("erro ao gravar bloco: {e}")); }
+            if let Err(e) = st.append(&self.c.blocks[hash]) { log(&format!("error writing block: {e}")); }
         }
         self.broadcast(&json!({ "t": "inv", "blocks": [to_hex(hash)] }), peer);
         let now = now_ms();
@@ -175,7 +175,7 @@ impl Node {
         for h in ready { let (b, p) = self.future.remove(&h).unwrap(); self.receive_block(b, p); }
     }
 
-    /// Entradas e imagens de chave já comprometidas por transações em fase de haste.
+    /// Inputs and key images already committed by transactions in the stem phase.
     pub fn stem_spends(&mut self) -> (HashSet<(Hash, u32)>, HashSet<[u8; 33]>) {
         let now = now_ms();
         self.stem.retain(|_, (_, at)| now - *at <= 60_000);
@@ -207,7 +207,7 @@ impl Node {
     }
     fn ban(&mut self, peer: u64, why: &str) {
         if let Some(p) = self.peers.remove(&peer) {
-            log(&format!("desconectando {}: {why}", p.addr));
+            log(&format!("disconnecting {}: {why}", p.addr));
             let _ = p.sock.shutdown(Shutdown::Both);
         }
         if self.stem_peer == Some(peer) { self.stem_peer = None; }
@@ -234,9 +234,9 @@ impl Node {
         if !ready && t != "hello" { return Ok(()); }
         match t {
             "hello" => {
-                if m["nonce"].as_str() == Some(&self.nonce) { self.ban(peer, "conexão consigo mesmo"); return Ok(()); }
+                if m["nonce"].as_str() == Some(&self.nonce) { self.ban(peer, "connection to itself"); return Ok(()); }
                 if m["network"].as_str() != Some(self.params.name) || m["genesis"].as_str() != Some(&to_hex(&self.c.genesis_hash)) {
-                    self.ban(peer, "rede diferente"); return Ok(());
+                    self.ban(peer, "different network"); return Ok(());
                 }
                 let listen_port = m["listen"].as_u64().unwrap_or(0);
                 let Some(p) = self.peers.get_mut(&peer) else { return Ok(()) };
@@ -244,9 +244,9 @@ impl Node {
                 let host = p.addr.rsplit_once(':').map(|x| x.0).unwrap_or("").replace("::ffff:", "").trim_matches(|c| c == '[' || c == ']').to_string();
                 let listen = format!("{host}:{listen_port}");
                 p.listen = Some(listen.clone());
-                let dir = if p.outbound { "saída" } else { "entrada" };
+                let dir = if p.outbound { "outbound" } else { "inbound" };
                 if !self.known.contains(&listen) { self.known.push(listen.clone()); }
-                log(&format!("par conectado: {listen} ({dir})"));
+                log(&format!("peer connected: {listen} ({dir})"));
                 let from = self.c.virt().gd.blue_score.saturating_sub(300);
                 self.send(peer, &json!({ "t": "getdag", "from": from }));
                 self.send(peer, &json!({ "t": "getaddr" }));
@@ -330,7 +330,7 @@ impl Node {
         self.stem_peer.filter(|s| Some(*s) != except)
     }
 
-    /// Transação criada localmente (RPC) ou recebida de um par. Devolve o JSON de resposta.
+    /// Transaction created locally (RPC) or received from a peer. Returns the response JSON.
     pub fn receive_tx(&mut self, tx: Arc<Transaction>, from: Option<u64>, stem: bool) -> Value {
         let id = tx.id();
         if self.mempool.txs.contains_key(&id) { return json!({ "ok": true, "txid": to_hex(&id), "duplicate": true }); }
@@ -393,7 +393,7 @@ impl Node {
 
 #[cfg(test)]
 impl Node {
-    /// Par "pronto" ligado a um soquete local (testes com mensagens hostis).
+    /// A "ready" peer attached to a local socket (tests with hostile messages).
     pub fn test_peer(&mut self) -> u64 {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let a = TcpStream::connect(l.local_addr().unwrap()).unwrap();
@@ -408,7 +408,7 @@ impl Node {
     }
 }
 
-// ================================================================ threads de rede
+// ================================================================ network threads
 fn attach(shared: &Shared, sock: TcpStream, outbound: bool, addr: String) {
     let (lock, _) = &**shared;
     let (tx, rx) = channel::<Vec<u8>>();
@@ -436,18 +436,18 @@ fn attach(shared: &Shared, sock: TcpStream, outbound: bool, addr: String) {
         loop {
             let mut head = [0u8; 8];
             if r.read_exact(&mut head).is_err() { break; }
-            if u32::from_le_bytes(head[..4].try_into().unwrap()) != magic { lock_node(lock).ban(id, "magia errada"); break; }
+            if u32::from_le_bytes(head[..4].try_into().unwrap()) != magic { lock_node(lock).ban(id, "wrong magic"); break; }
             let len = u32::from_le_bytes(head[4..].try_into().unwrap()) as usize;
-            if len > MAX_MSG { lock_node(lock).ban(id, "mensagem grande demais"); break; }
+            if len > MAX_MSG { lock_node(lock).ban(id, "message too large"); break; }
             let mut body = vec![0u8; len];
             if r.read_exact(&mut body).is_err() { break; }
-            let Ok(msg) = serde_json::from_slice::<Value>(&body) else { lock_node(lock).ban(id, "JSON inválido"); break };
+            let Ok(msg) = serde_json::from_slice::<Value>(&body) else { lock_node(lock).ban(id, "invalid JSON"); break };
             let mut n = lock_node(lock);
             if !n.peers.contains_key(&id) { break; }
             let v0 = n.c.virtual_version;
             match guarded(|| n.handle(id, &msg)) {
                 Ok(()) => {}
-                Err(e) if e.starts_with(INTERNAL) => { log(&format!("mensagem do par {id} provocou {e}")); n.ban(id, "mensagem provocou falha interna"); }
+                Err(e) if e.starts_with(INTERNAL) => { log(&format!("message from peer {id} caused {e}")); n.ban(id, "message caused an internal failure"); }
                 Err(e) => n.misbehave(id, 10, &e),
             }
             let changed = n.c.virtual_version != v0;
@@ -475,7 +475,7 @@ pub fn connect(shared: &Shared, addr: String) {
     });
 }
 
-/// Liga o nó: carrega o disco, abre P2P e RPC e roda a manutenção.
+/// Starts the node: loads the disk, opens P2P and RPC and runs maintenance.
 pub fn run(shared: Shared, seeds: Vec<String>) -> std::io::Result<()> {
     let (port, rpc_host, rpc_port, name, genesis) = {
         let mut n = lock_node(&shared.0);
@@ -493,7 +493,7 @@ pub fn run(shared: Shared, seeds: Vec<String>) -> std::io::Result<()> {
     });
     crate::rpc::start(shared.clone(), &rpc_host, rpc_port)?;
     for s in seeds { connect(&shared, s); }
-    log(&format!("Krevo {name} (nó em Rust) | P2P :{port} | RPC http://{rpc_host}:{rpc_port} | gênesis {}…", &genesis[..16]));
+    log(&format!("Krevo {name} (Rust node) | P2P :{port} | RPC http://{rpc_host}:{rpc_port} | genesis {}…", &genesis[..16]));
     let mut last_maint = now_ms();
     loop {
         std::thread::sleep(Duration::from_millis(250));

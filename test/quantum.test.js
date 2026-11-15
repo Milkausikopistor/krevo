@@ -1,4 +1,4 @@
-// Proteção quântica: endereço híbrido krq (Schnorr + ML-DSA-44) e catraca do pool privado.
+// Quantum protection: hybrid krq address (Schnorr + ML-DSA-44) and the private pool turnstile.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -37,7 +37,7 @@ async function mineVia(url, address, n) {
   }
 }
 
-/** Moedas maduras de um endereço quântico, prontas para o construtor. */
+/** Mature coins of a quantum-safe address, ready for the builder. */
 function qUtxos(c, keys) {
   const k = keys.qKey(0), daa = c.virtual.gd.daaScore;
   return c.utxosByLock(toHex(k.lock))
@@ -45,103 +45,103 @@ function qUtxos(c, keys) {
     .map((u) => ({ outpoint: parseOutpointKey(u.key), amount: u.amount, signer: k.signer, pq: k }));
 }
 
-test('ML-DSA-44: chaves determinísticas pela semente, assinatura e adulteração', () => {
+test('ML-DSA-44: deterministic keys from the seed, signature and tampering', () => {
   const seed = randomBytes(32);
   const a = mldsaKeyFromSeed(seed), b = mldsaKeyFromSeed(Buffer.from(seed));
   assert.equal(a.pub.length, MLDSA_PUB_SIZE);
-  assert.ok(a.pub.equals(b.pub), 'mesma semente → mesma chave (recuperável pela frase)');
+  assert.ok(a.pub.equals(b.pub), 'same seed → same key (recoverable from the phrase)');
   assert.ok(!mldsaKeyFromSeed(randomBytes(32)).pub.equals(a.pub));
-  const msg = Buffer.from('transação');
+  const msg = Buffer.from('transaction');
   const sig = mldsaSign(a.priv, msg);
   assert.equal(sig.length, MLDSA_SIG_SIZE);
   assert.ok(mldsaVerify(a.pub, msg, sig));
-  assert.equal(mldsaVerify(a.pub, Buffer.from('outra'), sig), false, 'outra mensagem');
+  assert.equal(mldsaVerify(a.pub, Buffer.from('other'), sig), false, 'another message');
   const bad = Buffer.from(sig); bad[100] ^= 1;
-  assert.equal(mldsaVerify(a.pub, msg, bad), false, 'assinatura adulterada');
-  assert.equal(mldsaVerify(mldsaKeyFromSeed(randomBytes(32)).pub, msg, sig), false, 'chave de outra pessoa');
-  assert.equal(mldsaVerify(a.pub, msg, sig.subarray(1)), false, 'tamanho errado');
+  assert.equal(mldsaVerify(a.pub, msg, bad), false, 'tampered signature');
+  assert.equal(mldsaVerify(mldsaKeyFromSeed(randomBytes(32)).pub, msg, sig), false, 'someone else\'s key');
+  assert.equal(mldsaVerify(a.pub, msg, sig.subarray(1)), false, 'wrong size');
 
-  // a carteira deriva o endereço krq da semente: restaurar dá o mesmo endereço
+  // the wallet derives the krq address from the seed: restoring gives the same address
   const s = randomBytes(32);
   const k1 = new Keys(s), k2 = new Keys(Buffer.from(s));
   assert.match(k1.qAddress(params), /^krqsim1/);
   assert.equal(k1.qAddress(params), k2.qAddress(params));
   assert.equal(decodeAddress(params, k1.qAddress(params)).type, 'q');
-  assert.throws(() => decodeAddress(getParams('devnet'), k1.qAddress(params)), /outra rede/);
+  assert.throws(() => decodeAddress(getParams('devnet'), k1.qAddress(params)), /another network/);
   assert.notEqual(k1.qAddress(params), Keys.random().qAddress(params));
 });
 
-test('testemunha híbrida: precisa das DUAS assinaturas e das chaves certas', () => {
+test('hybrid witness: it needs BOTH signatures and the right keys', () => {
   const me = new Keys(randomBytes(32)).qKey(0), other = Keys.random().qKey(0);
-  const msg = Buffer.from('corpo da transação');
+  const msg = Buffer.from('transaction body');
   const w = (k, sSig, qSig) => encodePqWitness(k.sPub, k.mldsa.pub, sSig, qSig);
   const good = w(me, me.signer.sign(msg), me.mldsa.sign(msg));
   assert.equal(good.length, PQ_WITNESS_SIZE);
   assert.ok(isPqWitness(good));
-  assert.ok(verifyPqWitness(me.lock, good, msg), 'válida');
-  assert.equal(verifyPqWitness(me.lock, good, Buffer.from('outra transação')), false, 'replay em outra transação');
+  assert.ok(verifyPqWitness(me.lock, good, msg), 'valid');
+  assert.equal(verifyPqWitness(me.lock, good, Buffer.from('another transaction')), false, 'replay in another transaction');
 
-  // "quebrou a curva elíptica": tem a chave Schnorr, mas não a ML-DSA
+  // "broke the elliptic curve": has the Schnorr key, but not the ML-DSA one
   const forgedQ = w(me, me.signer.sign(msg), other.mldsa.sign(msg));
-  assert.equal(verifyPqWitness(me.lock, forgedQ, msg), false, 'ML-DSA errada');
-  // "quebrou o reticulado": tem a ML-DSA, mas não a Schnorr
+  assert.equal(verifyPqWitness(me.lock, forgedQ, msg), false, 'wrong ML-DSA');
+  // "broke the lattice": has the ML-DSA key, but not the Schnorr one
   const forgedS = w(me, other.signer.sign(msg), me.mldsa.sign(msg));
-  assert.equal(verifyPqWitness(me.lock, forgedS, msg), false, 'Schnorr errada');
-  // trocar a chave ML-DSA por uma própria não bate com o hash do endereço
+  assert.equal(verifyPqWitness(me.lock, forgedS, msg), false, 'wrong Schnorr');
+  // swapping the ML-DSA key for one of your own does not match the address hash
   const swapped = encodePqWitness(me.sPub, other.mldsa.pub, me.signer.sign(msg), other.mldsa.sign(msg));
-  assert.equal(verifyPqWitness(me.lock, swapped, msg), false, 'chave trocada');
-  // testemunha válida de outra pessoa
+  assert.equal(verifyPqWitness(me.lock, swapped, msg), false, 'swapped key');
+  // valid witness from someone else
   const theirs = w(other, other.signer.sign(msg), other.mldsa.sign(msg));
-  assert.equal(verifyPqWitness(me.lock, theirs, msg), false, 'endereço de outra pessoa');
-  assert.equal(verifyPqWitness(me.lock, good.subarray(0, -1), msg), false, 'truncada');
-  assert.equal(verifyPqWitness(me.lock, me.signer.sign(msg), msg), false, 'só Schnorr não basta');
+  assert.equal(verifyPqWitness(me.lock, theirs, msg), false, 'someone else\'s address');
+  assert.equal(verifyPqWitness(me.lock, good.subarray(0, -1), msg), false, 'truncated');
+  assert.equal(verifyPqWitness(me.lock, me.signer.sign(msg), msg), false, 'Schnorr alone is not enough');
 });
 
-test('krq na rede: minerar, receber, gastar; ataque com só uma das chaves falha', () => {
+test('krq on the network: mine, receive, spend; an attack with only one of the keys fails', () => {
   const c = new Consensus(params);
   const clock = new Clock();
   const alice = Keys.random(), bob = Keys.random(), carol = Keys.random(), eve = Keys.random();
-  // recompensa de mineração direto no endereço quântico
+  // mining reward straight to the quantum-safe address
   for (let i = 0; i < 14; i++) mine(c, bob.qKey(0).lock, [], clock);
   for (let i = 0; i < 16; i++) mine(c, alice.tKey(0).lock, [], clock);
   const bobCoins = qUtxos(c, bob);
   assert.ok(bobCoins.length >= 3, 'recompensas maduras no krq');
 
-  // Alice (clássica) paga o krq de Bob
+  // Alice (classic) pays Bob's krq
   const fund = buildTransaction({ params, tInputs: matureTUtxos(c, alice).slice(0, 4), outputs: [{ type: 't', lock: bob.qKey(0).lock, amount: 2n * COIN }], change: { type: 't', lock: alice.tKey(0).lock } });
   mine(c, alice.tKey(0).lock, [fund.tx], clock);
   assert.equal(c.txStatus(fund.tx.idHex).status, 'accepted');
 
-  // Bob gasta do krq (assinatura híbrida), troco volta ao krq
+  // Bob spends from the krq (hybrid signature), the change goes back to the krq
   const spend = buildTransaction({ params, tInputs: bobCoins.slice(0, 2), outputs: [{ type: 't', lock: carol.tKey(0).lock, amount: COIN }], change: { type: 't', lock: bob.qKey(0).lock } });
   assert.ok(spend.tx.tIn.every((i) => i.sig.length === PQ_WITNESS_SIZE));
-  assert.equal(spend.tx.mass, Math.max(computeMass(spend.tx, params), spend.tx.mass), 'massa declarada cobre a computação');
-  assert.ok(spend.fee < 50_000n, `taxa ainda insignificante: ${spend.fee} grãos`);
+  assert.equal(spend.tx.mass, Math.max(computeMass(spend.tx, params), spend.tx.mass), 'declared mass covers the computation');
+  assert.ok(spend.fee < 50_000n, `fee still negligible: ${spend.fee} grains`);
   mine(c, alice.tKey(0).lock, [spend.tx], clock);
   assert.equal(c.txStatus(spend.tx.idHex).status, 'accepted');
   assert.equal(tUtxos(c, carol)[0].amount, COIN);
 
-  // Eve "quebrou" a curva elíptica: conhece a chave Schnorr de Bob, mas não a ML-DSA.
+  // Eve "broke" the elliptic curve: she knows Bob's Schnorr key, but not the ML-DSA one.
   const coin = qUtxos(c, bob).find((u) => u.amount === 2n * COIN);
   const k = bob.qKey(0);
   const evePq = { ...k, mldsa: { pub: k.mldsa.pub, sign: eve.qKey(0).mldsa.sign } };
   const theft = buildTransaction({ params, tInputs: [{ ...coin, pq: evePq }], outputs: [{ type: 't', lock: eve.tKey(0).lock, amount: COIN }], change: { type: 't', lock: eve.tKey(0).lock } });
   mine(c, alice.tKey(0).lock, [theft.tx], clock);
-  assert.equal(c.txStatus(theft.tx.idHex).status, 'unknown', 'roubo com só Schnorr é ignorado');
-  // …e usar a própria chave ML-DSA não bate com o hash do endereço
+  assert.equal(c.txStatus(theft.tx.idHex).status, 'unknown', 'theft with Schnorr alone is ignored');
+  // …and using her own ML-DSA key does not match the address hash
   const theft2 = buildTransaction({ params, tInputs: [{ ...coin, pq: { ...k, mldsa: eve.qKey(0).mldsa } }], outputs: [{ type: 't', lock: eve.tKey(0).lock, amount: COIN }] });
   mine(c, alice.tKey(0).lock, [theft2.tx], clock);
   assert.equal(c.txStatus(theft2.tx.idHex).status, 'unknown');
-  // Schnorr simples também não abre um krq
+  // plain Schnorr does not open a krq either
   const plain = buildTransaction({ params, tInputs: [{ outpoint: coin.outpoint, amount: coin.amount, signer: k.signer }], outputs: [{ type: 't', lock: eve.tKey(0).lock, amount: COIN }] });
   mine(c, alice.tKey(0).lock, [plain.tx], clock);
   assert.equal(c.txStatus(plain.tx.idHex).status, 'unknown');
   assert.equal(tUtxos(c, eve).length, 0);
-  assert.ok(qUtxos(c, bob).some((u) => u.amount === 2n * COIN), 'moeda de Bob intacta');
+  assert.ok(qUtxos(c, bob).some((u) => u.amount === 2n * COIN), 'Bob\'s coin intact');
 });
 
-test('catraca do pool privado: contabilidade pública e bloqueio de saída de moedas forjadas', () => {
-  // delta = entradas transparentes − saídas transparentes − taxa (só em transações com parte privada)
+test('private pool turnstile: public accounting and blocking forged coins from leaving', () => {
+  // delta = transparent inputs − transparent outputs − fee (only in transactions with a private part)
   const plainTx = { sIn: [], sOut: [], tOut: [{ amount: 5n }], fee: 1n };
   assert.equal(shieldedDelta(plainTx, 6n), 0n);
   assert.equal(shieldedDelta({ sIn: [], sOut: [{}], tOut: [], fee: 2n }, 100n), 98n, 'blindar');
@@ -155,11 +155,11 @@ test('catraca do pool privado: contabilidade pública e bloqueio de saída de mo
   assert.equal(c.supplyInfo().shieldedSupply, 0n);
   for (let i = 0; i < 14; i++) mine(c, bob.shieldedData, [], clock);
   for (let i = 0; i < 4; i++) mine(c, alice.tKey(0).lock, [], clock);
-  // todo KRV privado existente é de Bob: a catraca (pública) tem que bater com o saldo dele
+  // all existing private KRV is Bob's: the (public) turnstile must match his balance
   assert.ok(sumS() > 0n);
-  assert.equal(c.supplyInfo().shieldedSupply, sumS(), 'recompensas privadas entram na catraca');
+  assert.equal(c.supplyInfo().shieldedSupply, sumS(), 'private rewards enter the turnstile');
 
-  // Bob tira 0,25 KRV do pool para um endereço transparente (troco continua privado)
+  // Bob takes 0.25 KRV out of the pool to a transparent address (the change stays private)
   const coin = scanShielded(c, bob).find((o) => c.virtual.gd.daaScore - o.daa >= params.coinbaseMaturity);
   const unshield = () => buildTransaction({ params, sInputs: [{ ...coin, ring: makeRing(c, coin) }], outputs: [{ type: 't', lock: carol.tKey(0).lock, amount: Q }], change: { type: 's', A: bob.A, B: bob.B } }).tx;
   const ok = unshield();
@@ -168,33 +168,33 @@ test('catraca do pool privado: contabilidade pública e bloqueio de saída de mo
   assert.equal(c.txStatus(ok.idHex).status, 'accepted');
   assert.equal(c.supplyInfo().shieldedSupply, before - Q - ok.fee, 'desblindar reduz a catraca');
   assert.equal(c.supplyInfo().shieldedSupply, sumS());
-  // (num DAG, as transações de um bloco são aceitas pelo filho: mais um bloco fixa o desblindamento)
+  // (in a DAG, a block's transactions are accepted by its child: one more block settles the unshielding)
   mine(c, alice.tKey(0).lock, [], clock);
 
-  // Simulação: alguém forjou moedas DENTRO do pool (bug ou computador quântico). Para a
-  // rede, isso aparece como tentar tirar do pool mais do que entrou. Fingimos que o
-  // registro público diz que o pool está quase vazio e tentamos desblindar 1 KRV.
+  // Simulation: someone forged coins INSIDE the pool (a bug or a quantum computer). To the
+  // network, that shows up as trying to take more out of the pool than went in. We pretend the
+  // public record says the pool is almost empty and try to unshield 1 KRV.
   const tip = c.virtual.gd.selectedParent;
   const acc = c.acc.get(tip);
   acc.shielded = Q / 2n; acc.cbShielded = 0n;
-  c.virtual.acceptance.shielded = Q / 2n; // o nó reaproveita a aceitação do virtual (cache)
+  c.virtual.acceptance.shielded = Q / 2n; // the node reuses the virtual's acceptance (cache)
   const coin2 = scanShielded(c, bob).find((o) => o !== coin && c.virtual.gd.daaScore - o.daa >= params.coinbaseMaturity && o.amount > Q);
   const forged = buildTransaction({ params, sInputs: [{ ...coin2, ring: makeRing(c, coin2) }], outputs: [{ type: 't', lock: carol.tKey(0).lock, amount: Q }], change: { type: 's', A: bob.A, B: bob.B } }).tx;
   mine(c, alice.tKey(0).lock, [forged], clock, [tip]);
-  assert.equal(c.txStatus(forged.idHex).status, 'unknown', 'catraca barra a saída: as moedas forjadas ficam presas no pool');
-  assert.equal(tUtxos(c, carol).reduce((a, u) => a + u.amount, 0n), Q, 'Carol só tem os 0,25 KRV legítimos');
+  assert.equal(c.txStatus(forged.idHex).status, 'unknown', 'the turnstile blocks the exit: the forged coins stay stuck in the pool');
+  assert.equal(tUtxos(c, carol).reduce((a, u) => a + u.amount, 0n), Q, 'Carol only has the legitimate 0.25 KRV');
   assert.ok(c.supplyInfo().shieldedSupply >= 0n);
-  // o mempool recusa logo na entrada
+  // the mempool rejects it right at the door
   const mp = new Mempool(c);
   const r = mp.add(forged);
   assert.equal(r.ok, false);
-  assert.match(r.reason, /catraca/);
-  // movimentos DENTRO do pool continuam funcionando (privado → privado não mexe na catraca)
+  assert.match(r.reason, /turnstile/);
+  // movements INSIDE the pool keep working (private → private does not touch the turnstile)
   const inside = buildTransaction({ params, sInputs: [{ ...coin2, ring: makeRing(c, coin2) }], outputs: [{ type: 's', A: carol.A, B: carol.B, amount: Q / 10n }], change: { type: 's', A: bob.A, B: bob.B } });
-  assert.ok(shieldedDelta(inside.tx, 0n) < 0n && -shieldedDelta(inside.tx, 0n) === inside.fee, 'só a taxa sai do pool');
+  assert.ok(shieldedDelta(inside.tx, 0n) < 0n && -shieldedDelta(inside.tx, 0n) === inside.fee, 'only the fee leaves the pool');
 });
 
-test('carteira na rede: status, migração krv → krq, envio a partir do krq e restauração pela frase', async () => {
+test('wallet on the network: status, migration krv → krq, sending from the krq and restoring from the phrase', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'krv-quantum-test-'));
   const port = await freePorts(4);
   const node = new Node({ params, datadir: dir, p2pPort: port, rpcPort: port + 1, log: () => {}, persist: false });
@@ -213,33 +213,33 @@ test('carteira na rede: status, migração krv → krq, envio a partir do krq e 
     assert.ok(st.classic > 0n);
     assert.equal(st.quantum, 0n);
 
-    // migração: liga o modo quântico e move tudo que é clássico e maduro para krq
+    // migration: turns quantum mode on and moves everything classic and mature to krq
     const before = st.classic;
     const m = await alice.migrateQuantum();
     assert.ok(m.txs.length >= 1);
     await mineVia(url, bob.tAddress, 1);
     st = await alice.quantumStatus();
     assert.equal(st.enabled, true);
-    assert.equal(st.classic, 0n, 'nada sobrou no endereço clássico');
-    assert.equal(st.quantum, before - m.txs.reduce((a, t) => a + t.fee, 0n), 'só a taxa foi gasta');
-    assert.ok(m.txs.every((t) => t.fee < 100_000n), 'migração custa frações de centavo');
+    assert.equal(st.classic, 0n, 'nothing left at the classic address');
+    assert.equal(st.quantum, before - m.txs.reduce((a, t) => a + t.fee, 0n), 'only the fee was spent');
+    assert.ok(m.txs.every((t) => t.fee < 100_000n), 'migration costs fractions of a cent');
 
-    // gastar do krq: a carteira assina com Schnorr + ML-DSA, troco volta para o krq
+    // spending from the krq: the wallet signs with Schnorr + ML-DSA, the change goes back to the krq
     const r = await alice.send({ to: bob.tAddress, amount: COIN / 10n });
-    assert.equal(r.from, 'transparente');
+    assert.equal(r.from, 'transparent');
     await mineVia(url, bob.tAddress, 1);
     assert.equal((await rpc(url, 'gettransactionstatus', { txid: r.txid })).status, 'accepted');
     const tx = Transaction.deserialize(fromHex((await rpc(url, 'gettransaction', { txid: r.txid })).tx));
-    assert.ok(tx.tIn.every((i) => i.sig.length === PQ_WITNESS_SIZE), 'testemunha híbrida na rede');
+    assert.ok(tx.tIn.every((i) => i.sig.length === PQ_WITNESS_SIZE), 'hybrid witness on the network');
     st = await alice.quantumStatus();
-    assert.equal(st.classic, 0n, 'troco foi para o krq');
+    assert.equal(st.classic, 0n, 'the change went to the krq');
     assert.ok(st.quantum > 0n);
 
-    // o explorador / getinfo mostram a catraca do pool privado
+    // the explorer / getinfo show the private pool turnstile
     const info = await rpc(url, 'getinfo');
     assert.ok(BigInt(info.shieldedSupply) > 0n);
 
-    // mesma frase → mesmo endereço quântico e mesmo saldo (as chaves ML-DSA vêm da semente)
+    // same phrase → same quantum-safe address and same balance (the ML-DSA keys come from the seed)
     const restored = Wallet.restore(path.join(dir, 'r.json'), params, url, { mnemonic: alice.mnemonic });
     assert.equal(restored.qAddress, alice.qAddress);
     assert.equal((await restored.quantumStatus()).quantum, st.quantum);

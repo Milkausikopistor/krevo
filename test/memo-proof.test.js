@@ -11,67 +11,67 @@ import { Transaction } from '../src/consensus/tx.js';
 
 const params = getParams('devnet');
 
-test('memo: só o destinatário lê; tamanho fixo esconde se há mensagem', () => {
+test('memo: only the recipient reads it; a fixed size hides whether there is a message', () => {
   const a = randomScalar(), A = mulG(a), r = randomScalar();
   const ss = sharedSecret(r, A);
-  const text = 'Pedido nº 123 — obrigado! 🙂';
+  const text = 'Order #123 — thank you! 🙂';
   const blk = encryptMemo(text, ss, 0);
   assert.equal(blk.length, MEMO_BLOCK_SIZE);
-  assert.equal(decryptMemo(blk, sharedSecret(a, mulG(r)), 0), text, 'destinatário lê (a·R = r·A)');
-  assert.equal(decryptMemo(blk, ss, 1), null, 'índice de saída errado');
-  assert.equal(decryptMemo(blk, sharedSecret(randomScalar(), A), 0), null, 'outra pessoa não lê');
+  assert.equal(decryptMemo(blk, sharedSecret(a, mulG(r)), 0), text, 'the recipient reads it (a·R = r·A)');
+  assert.equal(decryptMemo(blk, ss, 1), null, 'wrong output index');
+  assert.equal(decryptMemo(blk, sharedSecret(randomScalar(), A), 0), null, 'someone else cannot read it');
   const bad = Buffer.from(blk); bad[20] ^= 1;
-  assert.equal(decryptMemo(bad, ss, 0), null, 'adulteração detectada');
-  assert.equal(encryptMemo('', ss, 0).length, blk.length, 'memo vazio tem o mesmo tamanho');
-  assert.throws(() => encryptMemo('x'.repeat(128), ss, 0), /longo demais/);
+  assert.equal(decryptMemo(bad, ss, 0), null, 'tampering detected');
+  assert.equal(encryptMemo('', ss, 0).length, blk.length, 'an empty memo has the same size');
+  assert.throws(() => encryptMemo('x'.repeat(128), ss, 0), /too long/);
 });
 
 function fakeInput(keys, amount) {
   return { outpoint: { txid: randomBytes(32), index: 0 }, amount, signer: keys.tKey(0).signer };
 }
 
-test('transação: toda saída privada leva bloco de memo; prova de pagamento válida e à prova de adulteração', () => {
+test('transaction: every private output carries a memo block; payment proof valid and tamper-proof', () => {
   const alice = Keys.random(), bob = Keys.random(), carol = Keys.random();
   const bobAddr = bob.sAddress(params), carolAddr = carol.sAddress(params);
   const amount = 3n * COIN;
   const withMemo = buildTransaction({
     params, tInputs: [fakeInput(alice, 10n * COIN)], outputs: [{ type: 's', A: bob.A, B: bob.B, amount }],
-    change: { type: 't', lock: alice.tKey(0).lock }, memo: 'fatura 2026-117',
+    change: { type: 't', lock: alice.tKey(0).lock }, memo: 'invoice 2026-117',
   });
   const noMemo = buildTransaction({
     params, tInputs: [fakeInput(alice, 10n * COIN)], outputs: [{ type: 's', A: bob.A, B: bob.B, amount }],
     change: { type: 't', lock: alice.tKey(0).lock },
   });
   assert.equal(withMemo.tx.payload.length, MEMO_BLOCK_SIZE);
-  assert.equal(noMemo.tx.payload.length, withMemo.tx.payload.length, 'com e sem memo são indistinguíveis');
+  assert.equal(noMemo.tx.payload.length, withMemo.tx.payload.length, 'with and without a memo they are indistinguishable');
   assert.equal(noMemo.tx.size, withMemo.tx.size);
   assert.throws(() => buildTransaction({
     params, tInputs: [fakeInput(alice, 10n * COIN)], outputs: [{ type: 't', lock: bob.tKey(0).lock, amount }], memo: 'x',
-  }), /ficaria público/);
+  }), /would be public/);
 
-  // o destinatário encontra a saída e o memo só com as próprias chaves
+  // the recipient finds the output and the memo with their own keys only
   const tx = Transaction.deserialize(withMemo.tx.serialize());
   const R = Point.fromBytes(tx.sOut[0].R);
   const o = tx.sOut[0];
   const got = scanShieldedOutput(bob.scanKeys, R, 0, { P: Point.fromBytes(o.P), C: Point.fromBytes(o.C), encAmount: o.encAmount, viewTag: o.viewTag });
   assert.equal(got.v, amount);
-  assert.equal(decryptMemo(tx.payload, got.ss, 0), 'fatura 2026-117');
+  assert.equal(decryptMemo(tx.payload, got.ss, 0), 'invoice 2026-117');
 
-  // prova de pagamento
-  const proof = createPaymentProof(params, { txid: tx.id, r: withMemo.r, address: bobAddr, message: 'pedido 117' });
+  // payment proof
+  const proof = createPaymentProof(params, { txid: tx.id, r: withMemo.r, address: bobAddr, message: 'order 117' });
   assert.match(proof, /^krpdev1/);
-  const ok = verifyPaymentProof(params, { proof, address: bobAddr, tx, message: 'pedido 117' });
+  const ok = verifyPaymentProof(params, { proof, address: bobAddr, tx, message: 'order 117' });
   assert.equal(ok.valid, true, ok.reason);
   assert.equal(ok.total, amount);
-  assert.equal(ok.memo, 'fatura 2026-117');
+  assert.equal(ok.memo, 'invoice 2026-117');
 
-  // não serve para outro endereço, outra mensagem, outra transação, nem adulterada
-  assert.equal(verifyPaymentProof(params, { proof, address: carolAddr, tx, message: 'pedido 117' }).valid, false);
-  assert.equal(verifyPaymentProof(params, { proof, address: bobAddr, tx, message: 'pedido 118' }).valid, false);
-  assert.equal(verifyPaymentProof(params, { proof, address: bobAddr, tx: noMemo.tx, message: 'pedido 117' }).valid, false);
+  // it does not work for another address, another message, another transaction, nor when tampered with
+  assert.equal(verifyPaymentProof(params, { proof, address: carolAddr, tx, message: 'order 117' }).valid, false);
+  assert.equal(verifyPaymentProof(params, { proof, address: bobAddr, tx, message: 'order 118' }).valid, false);
+  assert.equal(verifyPaymentProof(params, { proof, address: bobAddr, tx: noMemo.tx, message: 'order 117' }).valid, false);
   const tampered = proof.slice(0, 40) + (proof[40] === 'q' ? 'p' : 'q') + proof.slice(41);
-  assert.equal(verifyPaymentProof(params, { proof: tampered, address: bobAddr, tx, message: 'pedido 117' }).valid, false);
-  // alguém sem o segredo r não consegue forjar uma prova para Carol
+  assert.equal(verifyPaymentProof(params, { proof: tampered, address: bobAddr, tx, message: 'order 117' }).valid, false);
+  // someone without the secret r cannot forge a proof for Carol
   const forged = createPaymentProof(params, { txid: tx.id, r: randomScalar(), address: carolAddr });
   assert.equal(verifyPaymentProof(params, { proof: forged, address: carolAddr, tx }).valid, false);
 });

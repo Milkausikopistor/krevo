@@ -1,21 +1,21 @@
-// "Massa" = custo de recursos de uma transação. Taxa = massa × taxa por grama.
+// "Mass" = resource cost of a transaction. Fee = mass × fee per gram.
 //
-// massa de computação: bytes + custo de verificação de assinaturas/provas.
-// massa de armazenamento (KIP-9 do Kaspa): C · (Σ 1/saída − |E|²/Σ entrada).
-//   Criar muitas saídas minúsculas ("poeira") fica caro; consolidar fica barato.
-//   É isso que mantém o conjunto UTXO pequeno — e o hardware dos nós acessível —
-//   mesmo com taxas quase zero.
-// massa final = max(computação, armazenamento) e é declarada na própria transação.
+// compute mass: bytes + cost of verifying signatures/proofs.
+// storage mass (Kaspa's KIP-9): C · (Σ 1/output − |E|²/Σ input).
+//   Creating many tiny outputs ("dust") becomes expensive; consolidating becomes cheap.
+//   That is what keeps the UTXO set small — and node hardware affordable — even with
+//   near-zero fees.
+// final mass = max(compute, storage) and is declared in the transaction itself.
 
 import { isPqWitness } from './pqlock.js';
 import { parseWitnessPath } from './policy.js';
 import { COMMIT_WITNESS, parseCommitWitness } from './names.js';
 
-/** Quantas verificações de assinatura uma testemunha transparente exige (para a massa). */
+/** How many signature verifications a transparent witness requires (for the mass). */
 function sigCount(w) {
   if (w.length === 64) return 1;                  // Schnorr simples
-  if (isPqWitness(w)) return 2;                   // Schnorr + ML-DSA (verificar ML-DSA custa ~o mesmo)
-  if (w[0] === COMMIT_WITNESS) {                  // revelação de nome: conta a testemunha do dono
+  if (isPqWitness(w)) return 2;                   // Schnorr + ML-DSA (verifying ML-DSA costs about the same)
+  if (w[0] === COMMIT_WITNESS) {                  // name reveal: count the owner's witness
     const c = parseCommitWitness(w);
     if (c) return sigCount(c.inner);
   }
@@ -25,7 +25,7 @@ function sigCount(w) {
 
 export function computeMass(tx, params) {
   let m = tx.size * params.massPerByte;
-  // multiassinatura: cada testemunha traz M assinaturas (contagem conservadora pelo tamanho)
+  // multisig: each witness carries M signatures (conservative count by size)
   for (const i of tx.tIn) m += sigCount(i.sig) * params.massPerSig;
   for (const si of tx.sIn) m += si.ring.length ? si.ring.length * params.massPerRingMember : params.massPerFcmpInput;
   m += tx.sOut.length * params.massPerShieldedOutput;
@@ -33,8 +33,8 @@ export function computeMass(tx, params) {
 }
 
 /**
- * inputAmounts: valores das entradas transparentes (as privadas são ocultas e
- * contam como zero — conservador).
+ * inputAmounts: amounts of the transparent inputs (private ones are hidden and count
+ * as zero — conservative).
  */
 export function storageMass(tx, inputAmounts, params) {
   const C = params.storageMassC;

@@ -1,5 +1,5 @@
-//! `krevod replay`: reprocessa um arquivo de blocos (de um nó JavaScript ou Rust) e imprime um
-//! resumo do estado final — o mesmo que vectors/replay.mjs imprime com o nó de referência.
+//! `krevod replay`: reprocesses a block file (from a JavaScript or Rust node) and prints a
+//! summary of the final state — the same thing vectors/replay.mjs prints with the reference node.
 
 use crate::bytes::to_hex;
 use crate::consensus::{AddResult, Consensus, Status};
@@ -48,13 +48,13 @@ pub fn run(params: Params, file: &std::path::Path) -> serde_json::Value {
     for b in blocks {
         match c.add_block(b, 0, true) {
             AddResult::Accepted { .. } => ok += 1,
-            AddResult::Invalid { hash, reason } => { eprintln!("inválido {}: {reason}", to_hex(&hash)); other += 1 }
+            AddResult::Invalid { hash, reason } => { eprintln!("invalid {}: {reason}", to_hex(&hash)); other += 1 }
             _ => other += 1,
         }
     }
     let mut s = summary(&mut c);
-    eprintln!("{ok} blocos aceitos, {other} outros, em {:.2} s", t.elapsed().as_secs_f64());
-    for (h, r) in &c.disqualified { eprintln!("desqualificado {}: {r}", to_hex(h)); }
+    eprintln!("{ok} blocks accepted, {other} others, in {:.2} s", t.elapsed().as_secs_f64());
+    for (h, r) in &c.disqualified { eprintln!("disqualified {}: {r}", to_hex(h)); }
     s["replayMs"] = json!(t.elapsed().as_millis() as u64);
     s
 }

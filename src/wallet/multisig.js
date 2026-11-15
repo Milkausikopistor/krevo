@@ -1,15 +1,15 @@
-// Coordenação de multiassinatura M-de-N (o lado da carteira).
+// M-of-N multisig coordination (the wallet side).
 //
-//  1. Cada participante mostra sua chave de multiassinatura (krk1…).
-//  2. Qualquer um cria o grupo com M e as N chaves → endereço krv1… e um "descritor"
-//     (krm1…) para os outros importarem. Mesmas chaves + mesmo M = mesmo endereço.
-//  3. Pagamento: alguém cria uma PROPOSTA (arquivo JSON) com a transação sem assinaturas.
-//     O arquivo circula; cada signatário confere O QUE está assinando — lendo a própria
-//     transação, não o resumo de quem propôs — e acrescenta sua assinatura.
-//  4. Com M assinaturas, qualquer um junta tudo e envia para a rede.
+//  1. Each participant shows their multisig key (krk1…).
+//  2. Anyone creates the group with M and the N keys → krv1… address and a "descriptor"
+//     (krm1…) for the others to import. Same keys + same M = same address.
+//  3. Payment: someone creates a PROPOSAL (JSON file) with the unsigned transaction.
+//     The file circulates; each signer checks WHAT they are signing — reading the transaction
+//     itself, not the proposer's summary — and adds their signature.
+//  4. With M signatures, anyone merges everything and sends it to the network.
 //
-// Como o txid não inclui as assinaturas, todos assinam exatamente a mesma mensagem e a
-// ordem em que assinam não importa (cada um pode assinar quando puder, offline).
+// Since the txid does not include the signatures, everyone signs exactly the same message and
+// the order in which they sign does not matter (each one can sign when they can, offline).
 
 import { encode, decode } from '../util/bech32m.js';
 import { Point, hashToScalar, mulG, modN } from '../crypto/secp256k1.js';
@@ -23,16 +23,16 @@ import { buildTransaction } from './builder.js';
 import { rpc } from '../node/rpcclient.js';
 import { toHex, fromHex } from '../util/bytes.js';
 
-// ------------------------------------------------------------ chaves e grupo
-/** Chave de multiassinatura do participante, derivada da semente (recuperável pela frase). */
+// ------------------------------------------------------------ keys and group
+/** The participant's multisig key, derived from the seed (recoverable from the phrase). */
 export function multisigKey(keys) {
-  const signer = keys.multisigSigner(); // a chave fica no cofre
+  const signer = keys.multisigSigner(); // the key stays in the vault
   return { P: signer.P, signer };
 }
 export const encodeMultisigKey = (params, P) => encode(params.hrp.k, P.toBytes());
 export function decodeMultisigKey(params, s) {
   const { hrp, bytes } = decode(String(s).trim());
-  if (hrp !== params.hrp.k) throw new Error(`chave de multiassinatura de outra rede ou formato (${hrp})`);
+  if (hrp !== params.hrp.k) throw new Error(`multisig key from another network or format (${hrp})`);
   return Point.fromBytes(bytes);
 }
 
@@ -40,7 +40,7 @@ export class MultisigGroup {
   constructor(params, policyBytes, name = '') {
     this.params = params;
     this.policy = parsePolicy(policyBytes);
-    if (this.policy.bytes.length !== policyBytes.length) throw new Error('descritor com bytes extras');
+    if (this.policy.bytes.length !== policyBytes.length) throw new Error('descriptor with extra bytes');
     this.bytes = this.policy.bytes;
     this.name = name;
     this.lock = multisigLock(this.bytes);
@@ -50,10 +50,10 @@ export class MultisigGroup {
   }
   static fromDescriptor(params, descriptor, name) {
     const { hrp, bytes } = decode(String(descriptor).trim());
-    if (hrp !== params.hrp.m) throw new Error(`descritor de outra rede ou formato (${hrp})`);
+    if (hrp !== params.hrp.m) throw new Error(`descriptor from another network or format (${hrp})`);
     return new MultisigGroup(params, bytes, name);
   }
-  /** Herança: caminho 0 = dono (sozinho, sem espera); caminho 1 = herdeiros (M-de-N após a espera). */
+  /** Inheritance: path 0 = owner (alone, no wait); path 1 = heirs (M-of-N after the wait). */
   static createInheritance(params, ownerKey, heirKeys, heirM, delayBlocks, name) {
     const dec = (k) => (typeof k === 'string' ? decodeMultisigKey(params, k) : k);
     const bytes = encodePolicyPaths([
@@ -71,20 +71,20 @@ export class MultisigGroup {
   indexOf(P, path = 0) { return this.policy.paths[path].keys.findIndex((k) => k.equals(P)); }
 }
 
-// ------------------------------------------------------------- propostas
+// ------------------------------------------------------------- proposals
 export async function groupUtxos(rpcUrl, group) {
   const r = await rpc(rpcUrl, 'getutxos', { locks: [toHex(group.lock)] });
   return r.utxos;
 }
 
-/** Cria a proposta de pagamento (sem assinaturas). */
+/** Creates the payment proposal (without signatures). */
 export async function proposePayment({ params, rpcUrl, group, to, amount, memo, path = 0, sweep = false }) {
   const dest = decodeAddress(params, to);
-  if (memo && dest.type !== 's') throw new Error('memo só é possível para endereço privado (krs1…)');
+  if (memo && dest.type !== 's') throw new Error('a memo is only possible for a private address (krs1…)');
   const p = group.paths[path];
-  if (!p) throw new Error('caminho inexistente nesta política');
+  if (!p) throw new Error('path does not exist in this policy');
   const { daaScore, utxos } = await rpc(rpcUrl, 'getutxos', { locks: [toHex(group.lock)] });
-  // só saídas que já cumpriram a espera deste caminho
+  // only outputs that already met this path's wait
   const coins = utxos.filter((u) => u.mature && !u.inMempool && daaScore - u.daa >= p.delay)
     .sort((a, b) => (BigInt(b.amount) > BigInt(a.amount) ? 1 : -1));
   const tInputs = [];
@@ -98,9 +98,9 @@ export async function proposePayment({ params, rpcUrl, group, to, amount, memo, 
     const locked = utxos.filter((u) => daaScore - u.daa < p.delay);
     if (locked.length) {
       const wait = Math.min(...locked.map((u) => p.delay - (daaScore - u.daa)));
-      throw new Error(`saldo ainda bloqueado por tempo neste caminho (libera em ${wait} blocos ≈ ${formatWait(wait, params)})`);
+      throw new Error(`balance still time-locked on this path (unlocks in ${wait} blocks ≈ ${formatWait(wait, params)})`);
     }
-    throw new Error('saldo do grupo insuficiente');
+    throw new Error('insufficient group balance');
   }
   const outDesc = dest.type === 's' ? { type: 's', A: dest.A, B: dest.B } : { type: 't', lock: dest.data };
   const { tx, fee, change, r } = sweep
@@ -108,24 +108,24 @@ export async function proposePayment({ params, rpcUrl, group, to, amount, memo, 
     : buildTransaction({ params, tInputs, outputs: [{ ...outDesc, amount }], change: { type: 't', lock: group.lock }, memo });
   if (sweep) amount = acc - fee;
   return {
-    krevo: 'proposta-multiassinatura', version: 1, network: params.name, group: group.descriptor, path,
+    krevo: 'multisig-proposal', version: 1, network: params.name, group: group.descriptor, path,
     txid: tx.idHex, tx: toHex(tx.serialize()), to, amount: amount.toString(), fee: fee.toString(), change: change.toString(),
     inputs: tInputs.map((i) => ({ outpoint: `${toHex(i.outpoint.txid)}:${i.outpoint.index}`, amount: i.amount.toString() })),
-    // segredo da saída privada do destinatário: permite aos signatários conferir valor e destino
+    // secret of the recipient's private output: lets the signers check amount and destination
     outputSecret: dest.type === 's' && r ? r.toString(16) : null,
     signatures: {},
   };
 }
 
 /**
- * Lê a transação da proposta e descreve, de forma independente, o que ela faz.
- * Não confia no resumo de quem propôs: recalcula destino, valor e troco a partir da tx.
+ * Reads the proposal's transaction and describes, independently, what it does.
+ * It does not trust the proposer's summary: it recomputes destination, amount and change from the tx.
  */
 export function describeProposal(params, prop) {
-  if (prop.krevo !== 'proposta-multiassinatura' || prop.network !== params.name) throw new Error('arquivo não é uma proposta desta rede');
+  if (!['multisig-proposal', 'proposta-multiassinatura'].includes(prop.krevo) || prop.network !== params.name) throw new Error('the file is not a proposal for this network');
   const group = MultisigGroup.fromDescriptor(params, prop.group);
   const tx = Transaction.deserialize(fromHex(prop.tx));
-  if (tx.idHex !== prop.txid) throw new Error('proposta adulterada (txid não confere)');
+  if (tx.idHex !== prop.txid) throw new Error('tampered proposal (txid does not match)');
   const lockHex = toHex(group.lock);
   const payments = [];
   let change = 0n;
@@ -134,7 +134,7 @@ export function describeProposal(params, prop) {
     else payments.push({ to: encodeAddress(params, o.lock), amount: o.amount, private: false });
   }
   if (tx.sOut.length) {
-    // a 1ª saída privada é a do destinatário; o segredo r permite verificar valor e endereço
+    // the 1st private output is the recipient's; the secret r allows checking amount and address
     const dest = decodeAddress(params, prop.to);
     let verified = false, amount = null, memo = null;
     if (prop.outputSecret && dest.type === 's') {
@@ -147,56 +147,56 @@ export function describeProposal(params, prop) {
         memo = decryptMemo(tx.payload, ss, 0) || null;
       }
     }
-    if (!verified) throw new Error('não foi possível conferir a saída privada da proposta — NÃO assine');
+    if (!verified) throw new Error('could not check the proposal\'s private output — do NOT sign');
     payments.push({ to: prop.to, amount, private: true, memo });
-    if (tx.sOut.length > 1) throw new Error('proposta com saídas privadas extras — NÃO assine');
+    if (tx.sOut.length > 1) throw new Error('proposal with extra private outputs — do NOT sign');
   }
   const signers = Object.keys(prop.signatures).map(Number).sort((a, b) => a - b);
   const path = prop.path ?? 0;
-  if (!group.paths[path]) throw new Error('caminho inexistente na política');
+  if (!group.paths[path]) throw new Error('path does not exist in the policy');
   return {
     group, tx, payments, change, fee: tx.fee, inputs: tx.tIn.length, signers, have: signers.length,
     need: group.paths[path].m, path, delay: group.paths[path].delay,
   };
 }
 
-/** Confere na rede que as entradas são do grupo e soma os valores (taxa coerente). */
+/** Checks on the network that the inputs belong to the group and sums the amounts (consistent fee). */
 export async function checkProposalInputs(params, rpcUrl, prop) {
   const d = describeProposal(params, prop);
   const utxos = new Map((await groupUtxos(rpcUrl, d.group)).map((u) => [u.outpoint, BigInt(u.amount)]));
   let total = 0n;
   for (const i of d.tx.tIn) {
     const k = `${toHex(i.outpoint.txid)}:${i.outpoint.index}`;
-    if (!utxos.has(k)) throw new Error(`entrada ${k.slice(0, 16)}… não é um saldo disponível do grupo`);
+    if (!utxos.has(k)) throw new Error(`input ${k.slice(0, 16)}… is not an available balance of the group`);
     total += utxos.get(k);
   }
   const out = d.payments.reduce((a, p) => a + p.amount, 0n) + d.change;
-  if (total !== out + d.fee) throw new Error('valores da proposta não fecham (entradas ≠ saídas + taxa)');
+  if (total !== out + d.fee) throw new Error('the proposal\'s amounts do not add up (inputs ≠ outputs + fee)');
   return { ...d, totalIn: total };
 }
 
-/** Acrescenta a assinatura deste participante. */
+/** Adds this participant's signature. */
 export function signProposal(params, prop, keys) {
   const d = describeProposal(params, prop);
   const { signer, P } = multisigKey(keys);
   const idx = d.group.indexOf(P, d.path);
-  if (idx < 0) throw new Error(d.path ? 'sua chave não faz parte deste caminho da política' : 'sua chave não faz parte deste grupo');
+  if (idx < 0) throw new Error(d.path ? 'your key is not part of this policy path' : 'your key is not part of this group');
   const sig = signer.sign(d.tx.sighash());
   prop.signatures[idx] = toHex(sig);
   return { index: idx, have: Object.keys(prop.signatures).length, need: d.need };
 }
 
-/** Junta assinaturas de várias cópias da mesma proposta. */
+/** Merges signatures from several copies of the same proposal. */
 export function mergeProposals(props) {
   const base = { ...props[0], signatures: { ...props[0].signatures } };
   for (const p of props.slice(1)) {
-    if (p.txid !== base.txid) throw new Error('as propostas são de transações diferentes');
+    if (p.txid !== base.txid) throw new Error('the proposals are for different transactions');
     Object.assign(base.signatures, p.signatures);
   }
   return base;
 }
 
-/** Monta as testemunhas com M assinaturas válidas e devolve a transação pronta. */
+/** Builds the witnesses with M valid signatures and returns the ready transaction. */
 export function finalizeProposal(params, prop) {
   const d = describeProposal(params, prop);
   const msg = d.tx.sighash();
@@ -206,16 +206,16 @@ export function finalizeProposal(params, prop) {
     const key = d.group.paths[d.path].keys[idx];
     if (key && schnorrVerify(key, msg, sig)) sigs.set(idx, sig);
   }
-  if (sigs.size < d.need) throw new Error(`assinaturas válidas: ${sigs.size} de ${d.need} necessárias`);
+  if (sigs.size < d.need) throw new Error(`valid signatures: ${sigs.size} of ${d.need} required`);
   const witness = encodeWitness(d.group.bytes, sigs, d.path);
   d.tx.tIn.forEach((i) => { i.sig = witness; });
   d.tx.invalidate();
-  for (const i of d.tx.tIn) if (!verifyMultisigWitness(d.group.lock, i.sig, msg)) throw new Error('testemunha inválida');
+  for (const i of d.tx.tIn) if (!verifyMultisigWitness(d.group.lock, i.sig, msg)) throw new Error('invalid witness');
   return d.tx;
 }
 export { modN };
 
-// ------------------------------------------------------------------ herança
+// ------------------------------------------------------------------ inheritance
 export function formatWait(blocks, params) {
   const sec = blocks / params.bps;
   if (sec < 120) return `${Math.ceil(sec)} s`;
@@ -226,18 +226,18 @@ export function formatWait(blocks, params) {
 
 const UNITS = { s: 1, seg: 1, min: 60, h: 3600, d: 86400, m: 2629800, mes: 2629800, meses: 2629800, a: 31557600, y: 31557600, ano: 31557600, anos: 31557600 };
 
-/** Converte "365d", "6m" (meses), "1a" (anos), "12h", "30min", "20s" ou "5000b" (blocos) em blocos. */
+/** Converts "365d", "6m" (months), "1y" (years), "12h", "30min", "20s" or "5000b" (blocks) into blocks. */
 export function parseWait(str, params) {
   const m = /^(\d+(?:[.,]\d+)?)\s*([a-z]+)?$/i.exec(String(str).trim());
   const unit = (m?.[2] ?? 'd').toLowerCase();
-  if (!m || (!(unit in UNITS) && unit !== 'b' && unit !== 'blocos')) {
-    throw new Error(`tempo inválido: "${str}" (exemplos: 365d, 6m, 1a, 12h, 30min, 20s)`);
+  if (!m || (!(unit in UNITS) && unit !== 'b' && unit !== 'blocks' && unit !== 'blocos')) {
+    throw new Error(`invalid time: "${str}" (examples: 365d, 6m, 1y, 12h, 30min, 20s)`);
   }
   const n = Number(m[1].replace(',', '.'));
-  return Math.round(unit === 'b' || unit === 'blocos' ? n : n * UNITS[unit] * params.bps);
+  return Math.round(unit === 'b' || unit === 'blocks' || unit === 'blocos' ? n : n * UNITS[unit] * params.bps);
 }
 
-/** Situação de um plano de herança: saldo e quando os herdeiros poderão gastar. */
+/** State of an inheritance plan: balance and when the heirs will be able to spend. */
 export async function inheritanceStatus(params, rpcUrl, group) {
   const delay = group.paths[1].delay;
   const { daaScore, utxos } = await rpc(rpcUrl, 'getutxos', { locks: [toHex(group.lock)] });
@@ -246,14 +246,14 @@ export async function inheritanceStatus(params, rpcUrl, group) {
     balance: items.reduce((a, i) => a + i.amount, 0n),
     claimable: items.filter((i) => i.left === 0).reduce((a, i) => a + i.amount, 0n),
     delay, count: items.length,
-    nextUnlock: items.length ? Math.min(...items.map((i) => i.left)) : null, // primeira saída a liberar
-    fullUnlock: items.length ? Math.max(...items.map((i) => i.left)) : null, // quando todo o saldo libera
+    nextUnlock: items.length ? Math.min(...items.map((i) => i.left)) : null, // first output to unlock
+    fullUnlock: items.length ? Math.max(...items.map((i) => i.left)) : null, // when the whole balance unlocks
   };
 }
 
-/** Gasto por um caminho que só precisa de UMA assinatura (dono, ou herdeiro num plano 1-de-N). */
+/** Spend through a path that needs only ONE signature (owner, or heir in a 1-of-N plan). */
 export async function spendAlone({ params, rpcUrl, group, path, keys, to, amount, sweep = false, memo }) {
-  if (group.paths[path].m !== 1) throw new Error('este caminho exige mais de uma assinatura: use multisig propor/assinar/enviar com --caminho');
+  if (group.paths[path].m !== 1) throw new Error('this path requires more than one signature: use multisig propose/sign/send with --path');
   const prop = await proposePayment({ params, rpcUrl, group, to, amount, memo, path, sweep });
   signProposal(params, prop, keys);
   const tx = finalizeProposal(params, prop);

@@ -1,9 +1,9 @@
-// Demonstração completa de uma troca atômica Krevo ⇄ Bitcoin usando SÓ a linha de comando:
-// um nó Krevo (devnet) com minerador, o Bitcoin simulado e duas carteiras em processos
-// separados, cada uma rodando "krevo troca acompanhar" sozinha.
+// Full demo of a Krevo ⇄ Bitcoin atomic swap using ONLY the command line:
+// a Krevo node (devnet) with a miner, the simulated Bitcoin and two wallets in separate
+// processes, each one running "krevo swap watch" on its own.
 //   node scripts/swap-demo.js
 //
-// Alice vende 5 KRV e recebe 0,002 BTC; Bob faz o contrário. Ninguém confia em ninguém.
+// Alice sells 5 KRV and receives 0.002 BTC; Bob does the opposite. Nobody trusts anybody.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -19,7 +19,7 @@ import { hashToScalar } from '../src/crypto/secp256k1.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(root, 'src', 'cli.js');
 const params = getParams('devnet');
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'krevo-troca-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'krevo-swap-'));
 const BASE = 18100 + Math.floor(Math.random() * 400) * 10;
 const P2P = BASE, RPC = BASE + 1, BTCPORT = BASE + 2;
 const rpcUrl = `http://127.0.0.1:${RPC}`, btcApi = `http://127.0.0.1:${BTCPORT}`;
@@ -29,7 +29,7 @@ const t0 = Date.now();
 const say = (m) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1).padStart(5)} s] ${m}`);
 
 function start(args, name, onLine) {
-  const p = spawn(process.execPath, [cli, ...args, '--rede', 'devnet'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const p = spawn(process.execPath, [cli, ...args, '--network', 'devnet'], { stdio: ['ignore', 'pipe', 'pipe'] });
   const logf = fs.createWriteStream(path.join(tmp, name + '.log'));
   p.stdout.pipe(logf); p.stderr.pipe(logf);
   if (onLine) {
@@ -41,7 +41,7 @@ function start(args, name, onLine) {
 }
 function run(args) {
   return new Promise((resolve, reject) => {
-    const p = spawn(process.execPath, [cli, ...args, '--rede', 'devnet', '--rpc', rpcUrl], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const p = spawn(process.execPath, [cli, ...args, '--network', 'devnet', '--rpc', rpcUrl], { stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '', err = '';
     p.stdout.on('data', (d) => { out += d; });
     p.stderr.on('data', (d) => { err += d; });
@@ -56,69 +56,69 @@ async function waitFor(fn, what, timeout = 180_000) {
   const t = Date.now();
   for (;;) {
     try { const v = await fn(); if (v) return v; } catch {}
-    if (Date.now() - t > timeout) throw new Error('tempo esgotado: ' + what);
+    if (Date.now() - t > timeout) throw new Error('timed out: ' + what);
     await sleep(300);
   }
 }
 
 async function main() {
-  say(`diretório temporário: ${tmp}`);
-  start(['no', '--dados', path.join(tmp, 'no'), '--porta', String(P2P), '--rpcporta', String(RPC)], 'no');
-  start(['btc-simulado', '--porta', String(BTCPORT), '--bloco', '2s'], 'btc');
-  await waitFor(() => rpc(rpcUrl, 'getinfo'), 'nó Krevo');
-  await waitFor(async () => (await fetch(btcApi + '/blocks/tip/height')).ok, 'Bitcoin simulado');
-  say('nó Krevo (devnet) e Bitcoin simulado (regtest, 1 bloco a cada 2 s) no ar');
+  say(`temporary directory: ${tmp}`);
+  start(['node', '--datadir', path.join(tmp, 'node'), '--port', String(P2P), '--rpcport', String(RPC)], 'node');
+  start(['btc-sim', '--port', String(BTCPORT), '--block', '2s'], 'btc');
+  await waitFor(() => rpc(rpcUrl, 'getinfo'), 'Krevo node');
+  await waitFor(async () => (await fetch(btcApi + '/blocks/tip/height')).ok, 'simulated Bitcoin');
+  say('Krevo node (devnet) and simulated Bitcoin (regtest, 1 block every 2 s) up');
 
   const fa = path.join(tmp, 'alice.json'), fb = path.join(tmp, 'bob.json');
-  await run(['carteira', 'criar', '--arquivo', fa]);
-  await run(['carteira', 'criar', '--arquivo', fb]);
+  await run(['wallet', 'create', '--file', fa]);
+  await run(['wallet', 'create', '--file', fb]);
   const alice = Wallet.load(fa, params, rpcUrl), bob = Wallet.load(fb, params, rpcUrl);
-  // endereços Bitcoin "das carteiras Bitcoin" de cada um (no mundo real: Electrum, Sparrow, celular…)
+  // each one's address in their "Bitcoin wallet" (in the real world: Electrum, Sparrow, a phone…)
   const btcAddr = (who) => p2wpkhAddress(BTC_NETWORKS.regtest, pubFromPriv(hashToScalar('demo/btc', who, String(t0))));
   const aliceBtc = btcAddr('alice'), bobBtc = btcAddr('bob');
 
-  start(['minerar', '--endereco', alice.tAddress, '--rpc', rpcUrl], 'minerador');
-  await waitFor(async () => { await alice.sync(); return alice.balance().transparent > 8n * COIN; }, 'saldo de Alice');
-  say(`Alice tem KRV para vender; Bob tem BTC (endereço ${bobBtc.slice(0, 18)}…)`);
+  start(['mine', '--address', alice.tAddress, '--rpc', rpcUrl], 'miner');
+  await waitFor(async () => { await alice.sync(); return alice.balance().transparent > 8n * COIN; }, 'Alice\'s balance');
+  say(`Alice has KRV to sell; Bob has BTC (address ${bobBtc.slice(0, 18)}…)`);
 
-  // 1) oferta → 2) aceite → 3) confirmação (só troca de códigos, nenhum dinheiro se move)
-  const offerOut = await run(['troca', 'criar', '--arquivo', fa, '--vender', 'krv', '--krv', '5', '--btc', '0,002',
-    '--endereco-btc', aliceBtc, '--prazo', '2h', '--btc-api', btcApi]);
+  // 1) offer → 2) acceptance → 3) confirmation (only codes are exchanged, no money moves)
+  const offerOut = await run(['swap', 'create', '--file', fa, '--sell', 'krv', '--krv', '5', '--btc', '0.002',
+    '--btc-address', aliceBtc, '--deadline', '2h', '--btc-api', btcApi]);
   const offerCode = offerOut.match(/krxdev1[0-9a-z]+/)[0];
-  say(`Alice criou a oferta: ${offerCode.slice(0, 30)}… (${offerCode.length} caracteres)`);
-  const accOut = await run(['troca', 'aceitar', '--arquivo', fb, '--codigo', offerCode, '--endereco-btc', bobBtc, '--btc-api', btcApi]);
+  say(`Alice created the offer: ${offerCode.slice(0, 30)}… (${offerCode.length} characters)`);
+  const accOut = await run(['swap', 'accept', '--file', fb, '--code', offerCode, '--btc-address', bobBtc, '--btc-api', btcApi]);
   const accCode = accOut.match(/krxdev1[0-9a-z]+/)[0];
-  say('Bob aceitou e devolveu o código de aceite');
-  await run(['troca', 'confirmar', '--arquivo', fa, '--codigo', accCode]);
-  say('Alice registrou o aceite. Agora cada carteira conduz a troca sozinha:');
+  say('Bob accepted and sent back the acceptance code');
+  await run(['swap', 'confirm', '--file', fa, '--code', accCode]);
+  say('Alice recorded the acceptance. Now each wallet runs the swap on its own:');
 
-  // 4) cada um roda "troca acompanhar"; quando a carteira de Bob pedir, ele paga em BTC
+  // 4) each one runs "swap watch"; when Bob's wallet asks, he pays in BTC
   let paid = false, payTo = null;
   const done = { alice: false, bob: false };
   const watcher = (who) => (line) => {
-    if (!line.trim() || line.includes('\x1b[') || line.startsWith('bitcoin:')) return; // o QR code fica só no log
+    if (!line.trim() || line.includes('\x1b[') || line.startsWith('bitcoin:')) return; // the QR code only goes to the log
     say(`  ${who.padEnd(5)} │ ${line.replace(/^\[[^\]]+\] /, '')}`);
-    const m = line.match(/pague exatamente .* para (bcrt1[0-9a-z]+)/);
+    const m = line.match(/pay exactly .* to (bcrt1[0-9a-z]+)/);
     if (m) payTo = m[1];
   };
-  const pa = start(['troca', 'acompanhar', '--arquivo', fa, '--intervalo', '1s', '--rpc', rpcUrl], 'troca-alice', watcher('Alice'));
-  const pb = start(['troca', 'acompanhar', '--arquivo', fb, '--intervalo', '1s', '--rpc', rpcUrl], 'troca-bob', watcher('Bob'));
+  const pa = start(['swap', 'watch', '--file', fa, '--interval', '1s', '--rpc', rpcUrl], 'swap-alice', watcher('Alice'));
+  const pb = start(['swap', 'watch', '--file', fb, '--interval', '1s', '--rpc', rpcUrl], 'swap-bob', watcher('Bob'));
   pa.on('close', () => { done.alice = true; });
   pb.on('close', () => { done.bob = true; });
-  await waitFor(() => payTo, 'pedido de pagamento em BTC');
+  await waitFor(() => payTo, 'request for the BTC payment');
   if (!paid) {
-    await run(['btc-simulado', 'pagar', '--endereco', payTo, '--valor', '0,002', '--btc-api', btcApi]);
+    await run(['btc-sim', 'pay', '--address', payTo, '--amount', '0.002', '--btc-api', btcApi]);
     paid = true;
-    say('  (Bob pagou 0,002 BTC ao contrato pela carteira Bitcoin dele)');
+    say('  (Bob paid 0.002 BTC to the contract from his Bitcoin wallet)');
   }
-  await waitFor(() => done.alice && done.bob, 'fim da troca', 240_000);
+  await waitFor(() => done.alice && done.bob, 'end of the swap', 240_000);
 
-  // 5) resultado
-  const aliceBtcBal = (await run(['btc-simulado', 'saldo', '--endereco', aliceBtc, '--btc-api', btcApi])).trim();
+  // 5) result
+  const aliceBtcBal = (await run(['btc-sim', 'balance', '--address', aliceBtc, '--btc-api', btcApi])).trim();
   await bob.sync();
   const b = bob.balance();
-  say(`RESULTADO — Alice recebeu ${aliceBtcBal} no Bitcoin; Bob recebeu ${formatKRV(b.transparent + b.transparentPending)} na Krevo (valores já sem as taxas de rede)`);
-  say(`tempo total da troca (após o aceite): ${((Date.now() - t0) / 1000).toFixed(0)} s de demonstração`);
+  say(`RESULT — Alice received ${aliceBtcBal} on Bitcoin; Bob received ${formatKRV(b.transparent + b.transparentPending)} on Krevo (amounts already net of network fees)`);
+  say(`total swap time (after the acceptance): ${((Date.now() - t0) / 1000).toFixed(0)} s of demo`);
 }
 
-main().then(() => { cleanup(); process.exit(0); }).catch((e) => { console.error('FALHOU: ' + e.stack); cleanup(); process.exit(1); });
+main().then(() => { cleanup(); process.exit(0); }).catch((e) => { console.error('FAILED: ' + e.stack); cleanup(); process.exit(1); });

@@ -1,14 +1,14 @@
-// Explorador de blocos do Krevo: servidor web sem dependências que consulta um nó via RPC.
+// Krevo block explorer: a dependency-free web server that queries a node over RPC.
 //
-//   /                 painel ao vivo: estatísticas, DAG em tempo real, últimos blocos e transações
-//   /bloco/<hash>     detalhes do bloco (pais, filhos, mergeset azul/vermelho, recompensas)
-//   /tx/<txid>        detalhes da transação (partes privadas aparecem como ocultas)
-//   /endereco/<end>   saldo e histórico de endereços transparentes / multiassinatura
-//   /nome/<nome>      para onde um @nome aponta, dono e vencimento
-//   /busca?q=…        hash de bloco, txid, endereço ou @nome
-//   /api/…            os mesmos dados em JSON
-//
-// Tudo que vem da rede é escapado antes de ir para o HTML.
+//   /                 live dashboard: statistics, real-time DAG, latest blocks and transactions
+//   /block/<hash>     block details (parents, children, blue/red mergeset, rewards)
+//   /tx/<txid>        transaction details (private parts show as hidden)
+//   /address/<addr>   balance and history of transparent / multisig addresses
+//   /name/<name>      where an @name points, owner and expiry
+//   /search?q=…       block hash, txid, address or @name
+//   /api/…            the same data as JSON
+// (Links from older versions — /bloco, /endereco, /nome, /busca, /api/painel — still work.)
+// Everything that comes from the network is escaped before going into the HTML.
 
 import http from 'node:http';
 import { rpc } from '../node/rpcclient.js';
@@ -27,18 +27,18 @@ const json = (o) => JSON.stringify(o, (_, v) => (typeof v === 'bigint' ? v.toStr
 
 function ago(ms) {
   const s = Math.max(0, (Date.now() - ms) / 1000);
-  if (s < 60) return `há ${s.toFixed(s < 10 ? 1 : 0).replace('.', ',')} s`;
-  if (s < 3600) return `há ${Math.floor(s / 60)} min`;
-  if (s < 86400) return `há ${Math.floor(s / 3600)} h`;
-  return `há ${Math.floor(s / 86400)} d`;
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)} s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
 }
 function compact(n) {
   n = Number(n);
-  for (const [v, u] of [[1e12, ' T'], [1e9, ' G'], [1e6, ' M'], [1e3, ' k']]) if (n >= v) return (n / v).toFixed(1).replace('.', ',') + u;
+  for (const [v, u] of [[1e12, ' T'], [1e9, ' G'], [1e6, ' M'], [1e3, ' k']]) if (n >= v) return (n / v).toFixed(1) + u;
   return String(Math.round(n));
 }
 
-// ------------------------------------------------------------------ estilo
+// ------------------------------------------------------------------ style
 export const CSS = `
 :root{--bg:#f5f7fb;--panel:#fff;--text:#131826;--muted:#5f6b82;--line:#e2e6ef;--accent:#0f9d84;--blue:#3d6ff2;--red:#e0444f;--chip:#edf1f8;--edge:#c3cad8}
 @media (prefers-color-scheme:dark){:root{--bg:#0b0f19;--panel:#131a29;--text:#e7ebf4;--muted:#8d97ad;--line:#232c41;--accent:#2fd3ae;--blue:#5f8dff;--red:#ff6470;--chip:#1b2437;--edge:#3a4560}}
@@ -75,11 +75,11 @@ footer{max-width:1200px;margin:0 auto;padding:0 16px 30px;color:var(--muted);fon
 const LOGO = '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.7 5v10L12 22l-8.7-5V7z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="7.5" r="1.8" fill="currentColor"/><circle cx="7.5" cy="14.5" r="1.8" fill="currentColor"/><circle cx="16.5" cy="14.5" r="1.8" fill="currentColor"/><path d="M12 7.5l-4.5 7M12 7.5l4.5 7M7.5 14.5h9" stroke="currentColor" stroke-width="1.2"/></svg>';
 
 function page(params, title, body, { live = false } = {}) {
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} · Explorador Krevo</title><style>${CSS}</style></head><body>
-<header><div class="bar"><a class="brand" href="/">${LOGO}Explorador Krevo</a><span class="net">${esc(params.name)}</span>
-<form class="search" action="/busca"><input name="q" placeholder="Buscar bloco, transação, endereço ou @nome" aria-label="Buscar"></form></div></header>
-<main>${body}</main><footer>Krevo (KRV) · implementação de referência · as partes privadas das transações são invisíveis por projeto</footer>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · Krevo Explorer</title><style>${CSS}</style></head><body>
+<header><div class="bar"><a class="brand" href="/">${LOGO}Krevo Explorer</a><span class="net">${esc(params.name)}</span>
+<form class="search" action="/search"><input name="q" placeholder="Search block, transaction, address or @name" aria-label="Search"></form></div></header>
+<main>${body}</main><footer>Krevo (KRV) · reference implementation · the private parts of transactions are invisible by design</footer>
 ${live ? LIVE_SCRIPT : ''}</body></html>`;
 }
 
@@ -96,7 +96,7 @@ const LIVE_SCRIPT = `<script>
     busy = true;
     const live = document.getElementById('live');
     try {
-      const r = await fetch('/api/painel', { cache: 'no-store' });
+      const r = await fetch('/api/panel', { cache: 'no-store' });
       if (!r.ok) throw new Error();
       const d = await r.json();
       for (const id of ids) { const el = document.getElementById(id); if (el && typeof d[id] === 'string') el.innerHTML = d[id]; }
@@ -111,7 +111,7 @@ const LIVE_SCRIPT = `<script>
 
 // -------------------------------------------------------------- DAG (SVG)
 export function dagSvg(blocks) {
-  if (!blocks.length) return '<p class="muted">Sem blocos ainda.</p>';
+  if (!blocks.length) return '<p class="muted">No blocks yet.</p>';
   const known = new Map(blocks.map((b) => [b.hash, b]));
   const minBS = Math.min(...blocks.map((b) => b.blueScore));
   const cols = new Map();
@@ -123,7 +123,7 @@ export function dagSvg(blocks) {
   let maxLane = 0;
   const pos = new Map();
   for (const list of cols.values()) {
-    list.sort((a, b) => (b.chain - a.chain) || (a.hash < b.hash ? -1 : 1)); // cadeia selecionada no centro
+    list.sort((a, b) => (b.chain - a.chain) || (a.hash < b.hash ? -1 : 1)); // selected chain in the middle
     list.forEach((b, i) => {
       const lane = i === 0 ? 0 : (i % 2 ? -Math.ceil(i / 2) : Math.ceil(i / 2));
       maxLane = Math.max(maxLane, Math.abs(lane));
@@ -147,13 +147,13 @@ export function dagSvg(blocks) {
   for (const b of blocks) {
     const p = pos.get(b.hash);
     const cls = `n${b.chain ? ' chain' : b.color === 'red' ? ' red' : ''}${b.tip ? ' tip' : ''}`;
-    const tip = `bloco ${b.hash.slice(0, 12)} · blue score ${b.blueScore} · ${b.txs} tx · ${b.chain ? 'cadeia selecionada' : b.color === 'red' ? 'vermelho' : 'azul'}`;
-    nodes += `<a href="/bloco/${b.hash}"><rect class="${cls}" x="${p.x - R}" y="${y(p.lane) - R}" width="${2 * R}" height="${2 * R}" rx="4"><title>${esc(tip)}</title></rect></a>`;
+    const tip = `block ${b.hash.slice(0, 12)} · blue score ${b.blueScore} · ${b.txs} tx · ${b.chain ? 'selected chain' : b.color === 'red' ? 'red' : 'blue'}`;
+    nodes += `<a href="/block/${b.hash}"><rect class="${cls}" x="${p.x - R}" y="${y(p.lane) - R}" width="${2 * R}" height="${2 * R}" rx="4"><title>${esc(tip)}</title></rect></a>`;
   }
-  return `<svg class="dag" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="DAG dos blocos recentes">${edges}${nodes}</svg>`;
+  return `<svg class="dag" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="DAG of recent blocks">${edges}${nodes}</svg>`;
 }
 
-// ------------------------------------------------------------ servidor
+// ------------------------------------------------------------ server
 export function startExplorer({ params, rpcUrl, port = 8080, host = '127.0.0.1', log = () => {} }) {
   const call = (m, p) => rpc(rpcUrl, m, p);
   const txCache = new Map();
@@ -167,49 +167,49 @@ export function startExplorer({ params, rpcUrl, port = 8080, host = '127.0.0.1',
   }
 
   function kind(tx) {
-    if (tx.isCoinbase()) return { label: 'Recompensa de mineração', cls: 'chain' };
+    if (tx.isCoinbase()) return { label: 'Mining reward', cls: 'chain' };
     const ms = tx.tIn.some((i) => i.sig.length !== 64);
     const tin = tx.tIn.length > 0, sin = tx.sIn.length > 0, tout = tx.tOut.length > 0, sout = tx.sOut.length > 0;
-    if (ms) return { label: 'Multiassinatura / herança', cls: 'blue' };
-    if (tin && !sin && !sout) return { label: 'Transparente', cls: '' };
-    if (tin && sout) return { label: 'Blindagem (→ privado)', cls: 'priv' };
-    if (sin && tout) return { label: 'Desblindagem (→ transparente)', cls: 'priv' };
-    return { label: 'Privada', cls: 'priv' };
+    if (ms) return { label: 'Multisig / inheritance', cls: 'blue' };
+    if (tin && !sin && !sout) return { label: 'Transparent', cls: '' };
+    if (tin && sout) return { label: 'Shielding (→ private)', cls: 'priv' };
+    if (sin && tout) return { label: 'Unshielding (→ transparent)', cls: 'priv' };
+    return { label: 'Private', cls: 'priv' };
   }
   const visible = (tx) => tx.tOut.reduce((a, o) => a + o.amount, 0n);
   const amountCell = (tx) => (tx.sOut.length && !tx.isCoinbase()
-    ? (tx.tOut.length ? `${formatKRV(visible(tx))} + <span class="muted">oculto</span>` : '<span class="muted">oculto</span>')
+    ? (tx.tOut.length ? `${formatKRV(visible(tx))} + <span class="muted">hidden</span>` : '<span class="muted">hidden</span>')
     : formatKRV(visible(tx)));
   const addrLink = (a) => (String(a).startsWith('@')
-    ? `<a href="/nome/${esc(a.slice(1).split(' ')[0])}"><b>${esc(a.split(' ')[0])}</b></a> <span class="chip blue">registro de nome</span>`
-    : String(a).startsWith('compromisso') ? `<span class="chip">compromisso de nome</span> <span class="muted">o nome só aparece na revelação</span>`
-      : `<a class="mono" href="/endereco/${esc(a)}">${esc(short(a, 14, 8))}</a>`);
+    ? `<a href="/name/${esc(a.slice(1).split(' ')[0])}"><b>${esc(a.split(' ')[0])}</b></a> <span class="chip blue">name record</span>`
+    : String(a).startsWith('name commitment') ? `<span class="chip">name commitment</span> <span class="muted">the name only appears in the reveal</span>`
+      : `<a class="mono" href="/address/${esc(a)}">${esc(short(a, 14, 8))}</a>`);
   const lockText = (lock) => describeLock(params, lock);
-  const blockLink = (h) => `<a class="mono" href="/bloco/${esc(h)}">${esc(short(h))}</a>`;
+  const blockLink = (h) => `<a class="mono" href="/block/${esc(h)}">${esc(short(h))}</a>`;
   const txLink = (h) => `<a class="mono" href="/tx/${esc(h)}">${esc(short(h))}</a>`;
-  const colorChip = (b) => (b.chain ? '<span class="chip chain">cadeia</span>' : b.color === 'red' ? '<span class="chip red">vermelho</span>' : '<span class="chip blue">azul</span>');
+  const colorChip = (b) => (b.chain ? '<span class="chip chain">chain</span>' : b.color === 'red' ? '<span class="chip red">red</span>' : '<span class="chip blue">blue</span>');
 
-  // ---------------------------------------------------------- painel
+  // ---------------------------------------------------------- dashboard
   async function panel() {
     const [info, dag, mempool] = await Promise.all([call('getinfo'), call('getdag', { limit: 70 }), call('getmempool', { limit: 10 })]);
     const pct = Number((BigInt(info.minted) * 10_000n) / MAX_SUPPLY) / 100;
     const stat = (v, l) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`;
     const stats = [
-      stat(`${String(info.blocksPerSecond).replace('.', ',')}`, 'blocos por segundo'),
-      stat(info.virtual.blueScore.toLocaleString('pt-BR'), 'blue score'),
-      stat(`${compact(info.hashrate)}H/s`, 'poder de mineração'),
-      stat(`${formatKRV(BigInt(info.minted)).replace(' KRV', '')}`, `KRV emitidos (${pct.toLocaleString('pt-BR')}% do teto)`),
-      stat(formatKRV(BigInt(info.feePool)).replace(' KRV', ''), 'KRV no Fundo de Segurança'),
-      stat(info.mempool, 'transações na mempool'),
-      stat(info.shieldedOutputs.toLocaleString('pt-BR'), 'saídas privadas (anonimato)'),
-      stat((info.names ?? 0).toLocaleString('pt-BR'), 'nomes registrados (@nome)'),
-      stat(formatKRV(BigInt(info.shieldedSupply ?? 0)).replace(' KRV', ''), 'KRV no pool privado (catraca)'),
-      stat(info.redBlocks, 'blocos vermelhos'),
-      stat(info.tips, 'pontas do DAG'),
-      stat(info.peers, 'pares conectados'),
+      stat(`${info.blocksPerSecond}`, 'blocks per second'),
+      stat(info.virtual.blueScore.toLocaleString('en-US'), 'blue score'),
+      stat(`${compact(info.hashrate)}H/s`, 'mining power'),
+      stat(`${formatKRV(BigInt(info.minted)).replace(' KRV', '')}`, `KRV issued (${pct.toLocaleString('en-US')}% of the cap)`),
+      stat(formatKRV(BigInt(info.feePool)).replace(' KRV', ''), 'KRV in the Security Fund'),
+      stat(info.mempool, 'transactions in the mempool'),
+      stat(info.shieldedOutputs.toLocaleString('en-US'), 'private outputs (anonymity set)'),
+      stat((info.names ?? 0).toLocaleString('en-US'), 'registered names (@name)'),
+      stat(formatKRV(BigInt(info.shieldedSupply ?? 0)).replace(' KRV', ''), 'KRV in the private pool (turnstile)'),
+      stat(info.redBlocks, 'red blocks'),
+      stat(info.tips, 'DAG tips'),
+      stat(info.peers, 'connected peers'),
     ].join('');
     const recent = [...dag.blocks].reverse();
-    const blocksHtml = `<table><tr><th>Bloco</th><th>Blue score</th><th>Quando</th><th class="right">Tx</th><th>Cor</th></tr>${
+    const blocksHtml = `<table><tr><th>Block</th><th>Blue score</th><th>When</th><th class="right">Tx</th><th>Color</th></tr>${
       recent.slice(0, 12).map((b) => `<tr><td>${blockLink(b.hash)}</td><td>${b.blueScore}</td><td class="muted">${ago(b.timestamp)}</td><td class="right">${b.txs}</td><td>${colorChip(b)}</td></tr>`).join('')}</table>`;
     const ids = [...mempool.map((m) => ({ txid: m.txid, pending: true, time: m.added }))];
     for (const b of recent) for (const t of b.txids) if (ids.length < 12) ids.push({ txid: t, pending: false, time: b.timestamp });
@@ -218,34 +218,34 @@ export function startExplorer({ params, rpcUrl, port = 8080, host = '127.0.0.1',
       try {
         const { tx } = await getTx(it.txid);
         const k = kind(tx);
-        rows.push(`<tr><td>${txLink(it.txid)}</td><td><span class="chip ${k.cls}">${esc(k.label)}</span></td><td class="amt">${amountCell(tx)}</td><td class="muted">${it.pending ? 'na mempool' : ago(it.time)}</td></tr>`);
-      } catch { /* pode ter saído da mempool */ }
+        rows.push(`<tr><td>${txLink(it.txid)}</td><td><span class="chip ${k.cls}">${esc(k.label)}</span></td><td class="amt">${amountCell(tx)}</td><td class="muted">${it.pending ? 'in the mempool' : ago(it.time)}</td></tr>`);
+      } catch { /* it may have left the mempool */ }
     }
     const txsHtml = rows.length
-      ? `<table><tr><th>Transação</th><th>Tipo</th><th>Valor visível</th><th>Quando</th></tr>${rows.join('')}</table>`
-      : '<p class="muted">Nenhuma transação recente — só recompensas de mineração.</p>';
+      ? `<table><tr><th>Transaction</th><th>Type</th><th>Visible amount</th><th>When</th></tr>${rows.join('')}</table>`
+      : '<p class="muted">No recent transactions — only mining rewards.</p>';
     return { stats, dag: dagSvg(dag.blocks), blocks: blocksHtml, txs: txsHtml };
   }
 
   async function homePage() {
     const p = await panel();
-    return page(params, 'Painel', `
-<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap"><h1>Rede ${esc(params.name)}</h1><span id="live" class="live">ao vivo</span></div>
+    return page(params, 'Dashboard', `
+<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap"><h1>${esc(params.name)} network</h1><span id="live" class="live">live</span></div>
 <div class="stats" id="stats">${p.stats}</div>
-<section class="panel"><h2>DAG ao vivo — os últimos blocos</h2>
+<section class="panel"><h2>Live DAG — the latest blocks</h2>
 <div class="dagwrap"><div id="dag">${p.dag}</div></div>
-<div class="legend"><span><i style="background:var(--accent)"></i>cadeia selecionada</span><span><i style="background:var(--blue)"></i>bloco azul (paralelo, aceito)</span><span><i style="background:var(--red)"></i>bloco vermelho</span><span><i style="border:1.5px dashed var(--text)"></i>ponta (ainda não fundida)</span><span>linhas = referências aos pais · mais novo à direita</span></div>
-<p class="muted" style="margin:8px 0 0;font-size:13px">No Bitcoin, blocos simultâneos competem e um vira órfão. No BlockDAG, cada bloco aponta para <b>todas</b> as pontas que conhece — os paralelos são costurados no grafo e ninguém perde o trabalho.</p></section>
-<div class="cols"><section class="panel"><h2>Últimos blocos</h2><div id="blocks">${p.blocks}</div></section>
-<section class="panel"><h2>Últimas transações</h2><div id="txs">${p.txs}</div></section></div>`, { live: true });
+<div class="legend"><span><i style="background:var(--accent)"></i>selected chain</span><span><i style="background:var(--blue)"></i>blue block (parallel, accepted)</span><span><i style="background:var(--red)"></i>red block</span><span><i style="border:1.5px dashed var(--text)"></i>tip (not merged yet)</span><span>lines = references to parents · newest on the right</span></div>
+<p class="muted" style="margin:8px 0 0;font-size:13px">In Bitcoin, simultaneous blocks compete and one becomes an orphan. In a BlockDAG, each block points to <b>all</b> the tips it knows — parallel blocks are stitched into the graph and nobody loses their work.</p></section>
+<div class="cols"><section class="panel"><h2>Latest blocks</h2><div id="blocks">${p.blocks}</div></section>
+<section class="panel"><h2>Latest transactions</h2><div id="txs">${p.txs}</div></section></div>`, { live: true });
   }
 
-  // ------------------------------------------------------------ bloco
+  // ------------------------------------------------------------ block
   async function blockData(hash) { return call('getblock', { hash }); }
   async function blockPage(hash) {
     const b = await blockData(hash);
-    const situ = b.status === 'disq' ? '<span class="chip red">desqualificado da cadeia</span>' : colorChip(b);
-    const list = (arr, empty = 'nenhum') => (arr.length ? arr.map(blockLink).join('<br>') : `<span class="muted">${empty}</span>`);
+    const situ = b.status === 'disq' ? '<span class="chip red">disqualified from the chain</span>' : colorChip(b);
+    const list = (arr, empty = 'none') => (arr.length ? arr.map(blockLink).join('<br>') : `<span class="muted">${empty}</span>`);
     const txRows = [];
     for (const id of b.txs) {
       const { tx } = await getTx(id);
@@ -253,30 +253,30 @@ export function startExplorer({ params, rpcUrl, port = 8080, host = '127.0.0.1',
       txRows.push(`<tr><td>${txLink(id)}</td><td><span class="chip ${k.cls}">${esc(k.label)}</span></td><td class="amt">${amountCell(tx)}</td></tr>`);
     }
     const rewards = b.coinbase.transparent.map((o) => `<tr><td>${addrLink(o.address)}</td><td class="amt right">${formatKRV(BigInt(o.amount))}</td></tr>`).join('')
-      + (b.coinbase.shielded ? `<tr><td class="muted">${b.coinbase.shielded} recompensa(s) para endereço privado</td><td class="right muted">oculto no endereço, valor público</td></tr>` : '');
-    return page(params, `Bloco ${short(hash)}`, `
-<h1>Bloco <span class="mono">${esc(short(hash, 16, 8))}</span> ${situ}</h1>
+      + (b.coinbase.shielded ? `<tr><td class="muted">${b.coinbase.shielded} reward(s) to a private address</td><td class="right muted">address hidden, amount public</td></tr>` : '');
+    return page(params, `Block ${short(hash)}`, `
+<h1>Block <span class="mono">${esc(short(hash, 16, 8))}</span> ${situ}</h1>
 <section class="panel"><table class="kv">
 <tr><td>Hash</td><td class="mono">${esc(hash)}</td></tr>
-<tr><td>Quando</td><td>${new Date(b.timestamp).toLocaleString('pt-BR')} <span class="muted">(${ago(b.timestamp)})</span></td></tr>
+<tr><td>When</td><td>${new Date(b.timestamp).toLocaleString('en-US')} <span class="muted">(${ago(b.timestamp)})</span></td></tr>
 <tr><td>Blue score / DAA score</td><td>${b.blueScore} / ${b.daaScore}</td></tr>
-<tr><td>Minerador</td><td>${b.miner ? addrLink(b.miner) : '<span class="muted">— (gênesis)</span>'}</td></tr>
-<tr><td>Transações</td><td>${b.txs.length} (incluindo a coinbase) · aceitou ${b.accepted} do seu mergeset</td></tr>
-<tr><td>Tamanho / massa</td><td>${b.size.toLocaleString('pt-BR')} bytes / ${b.mass.toLocaleString('pt-BR')} g</td></tr>
-<tr><td>Pai selecionado</td><td>${b.selectedParent ? blockLink(b.selectedParent) : '<span class="muted">—</span>'}</td></tr>
-<tr><td>Pais (${b.parents.length})</td><td>${list(b.parents, 'nenhum (gênesis)')}</td></tr>
-<tr><td>Filhos (${b.children.length})</td><td>${list(b.children, 'nenhum ainda (é uma ponta)')}</td></tr>
-<tr><td>Mergeset azul</td><td>${list(b.blues)}</td></tr>
-<tr><td>Mergeset vermelho</td><td>${list(b.reds)}</td></tr>
-<tr><td>Compromisso UTXO</td><td class="mono">${esc(b.utxoCommitment)}</td></tr>
+<tr><td>Miner</td><td>${b.miner ? addrLink(b.miner) : '<span class="muted">— (genesis)</span>'}</td></tr>
+<tr><td>Transactions</td><td>${b.txs.length} (including the coinbase) · accepted ${b.accepted} from its mergeset</td></tr>
+<tr><td>Size / mass</td><td>${b.size.toLocaleString('en-US')} bytes / ${b.mass.toLocaleString('en-US')} g</td></tr>
+<tr><td>Selected parent</td><td>${b.selectedParent ? blockLink(b.selectedParent) : '<span class="muted">—</span>'}</td></tr>
+<tr><td>Parents (${b.parents.length})</td><td>${list(b.parents, 'none (genesis)')}</td></tr>
+<tr><td>Children (${b.children.length})</td><td>${list(b.children, 'none yet (it is a tip)')}</td></tr>
+<tr><td>Blue mergeset</td><td>${list(b.blues)}</td></tr>
+<tr><td>Red mergeset</td><td>${list(b.reds)}</td></tr>
+<tr><td>UTXO commitment</td><td class="mono">${esc(b.utxoCommitment)}</td></tr>
 <tr><td>Nonce / bits</td><td class="mono">${esc(b.nonce)} / 0x${Number(b.bits).toString(16)}</td></tr>
 </table></section>
-<div class="cols"><section class="panel"><h2>Transações</h2><table><tr><th>Transação</th><th>Tipo</th><th>Valor visível</th></tr>${txRows.join('')}</table></section>
-<section class="panel"><h2>Recompensas pagas por este bloco</h2><table>${rewards || '<tr><td class="muted">nenhuma</td></tr>'}</table>
-<p class="muted" style="font-size:13px">Cada bloco da cadeia paga, na sua coinbase, os blocos do seu mergeset (azuis ao próprio minerador; vermelhos a quem os fundiu).</p></section></div>`);
+<div class="cols"><section class="panel"><h2>Transactions</h2><table><tr><th>Transaction</th><th>Type</th><th>Visible amount</th></tr>${txRows.join('')}</table></section>
+<section class="panel"><h2>Rewards paid by this block</h2><table>${rewards || '<tr><td class="muted">none</td></tr>'}</table>
+<p class="muted" style="font-size:13px">Each chain block pays, in its coinbase, the blocks of its mergeset (blue ones to their own miner; red ones to whoever merged them).</p></section></div>`);
   }
 
-  // ------------------------------------------------------------ transação
+  // ------------------------------------------------------------ transaction
   async function txDetail(txid) {
     const { info, tx } = await getTx(txid);
     const inputs = [];
@@ -286,7 +286,7 @@ export function startExplorer({ params, rpcUrl, port = 8080, host = '127.0.0.1',
       try {
         const prev = (await getTx(prevId)).tx.tOut[i.outpoint.index];
         if (prev) { address = lockText(prev.lock); amount = prev.amount; }
-      } catch { /* origem fora do índice */ }
+      } catch { /* origin outside the index */ }
       const quantum = isPqWitness(i.sig);
       const reveal = parseCommitWitness(i.sig);
       const w = i.sig.length !== 64 && !quantum ? parseWitnessPath(i.sig) : null;
@@ -306,7 +306,7 @@ export function startExplorer({ params, rpcUrl, port = 8080, host = '127.0.0.1',
     return {
       txid, kind: kind(tx).label, status: info.status, confirmations: info.confirmations, includedIn: info.includedIn,
       acceptingBlock: info.acceptingBlock, fee: tx.fee, mass: tx.mass, size: tx.size, inputs, outputs,
-      memo: tx.payload.length === 145 && tx.payload[0] === 1 ? 'cifrado' : null, rangeProof: tx.rangeProof.length,
+      memo: tx.payload.length === 145 && tx.payload[0] === 1 ? 'encrypted' : null, rangeProof: tx.rangeProof.length,
       coinbasePayload: tx.isCoinbase() ? toHex(tx.payload) : null,
     };
   }
@@ -314,32 +314,32 @@ export function startExplorer({ params, rpcUrl, port = 8080, host = '127.0.0.1',
     const d = await txDetail(txid);
     const { tx } = await getTx(txid);
     const k = kind(tx);
-    const st = d.status === 'accepted' ? `<span class="chip chain">aceita</span> <span class="muted">${d.confirmations} blocos azuis acima</span>`
-      : d.status === 'mempool' ? '<span class="chip">na mempool</span>' : '<span class="chip red">não aceita (conflito ou ainda não fundida)</span>';
+    const st = d.status === 'accepted' ? `<span class="chip chain">accepted</span> <span class="muted">${d.confirmations} blue blocks on top</span>`
+      : d.status === 'mempool' ? '<span class="chip">in the mempool</span>' : '<span class="chip red">not accepted (conflict or not merged yet)</span>';
     const ins = d.inputs.map((i) => (i.type === 'transparent'
-      ? `<tr><td>${i.address ? addrLink(i.address) : '<span class="muted">origem desconhecida</span>'}${i.multisig ? `<br><span class="chip blue">política: caminho ${i.multisig.path}, ${i.multisig.m} de ${i.multisig.n}${i.multisig.delay ? `, espera ${i.multisig.delay.toLocaleString('pt-BR')} blocos` : ''}</span>` : ''}${i.quantum ? '<br><span class="chip blue">assinatura híbrida: Schnorr + ML-DSA-44 (resistente a quântico)</span>' : ''}${i.nameReveal ? `<br><span class="chip blue">revelação do nome @${esc(i.nameReveal)}</span>` : ''}${i.swapSecret ? `<br><span class="chip blue">troca atômica: resgate com segredo revelado</span> <span class="mono">${esc(short(i.swapSecret, 12, 6))}</span>` : ''}<br><span class="muted">de ${txLink(i.prevTx)} #${i.index}</span></td><td class="amt right">${i.amount !== null ? formatKRV(i.amount) : '—'}</td></tr>`
-      : i.fcmp ? `<tr><td><span class="chip priv">entrada privada</span> <b>uma</b> das ${i.anonymitySet.toLocaleString('pt-BR')} saídas privadas que já existiram é a gasta — ninguém sabe qual<br><span class="muted">prova de pertencimento à cadeia inteira · imagem de chave</span> <span class="mono">${esc(short(i.keyImage, 12, 6))}</span></td><td class="right muted">oculto</td></tr>`
-      : `<tr><td><span class="chip priv">entrada privada</span> anel de ${i.ring.length}: <b>uma</b> destas saídas é a gasta — ninguém sabe qual<details><summary class="muted">ver o anel</summary>${i.ring.map((m) => `${txLink(m.tx)} #${m.index}`).join('<br>')}</details><span class="muted">imagem de chave</span> <span class="mono">${esc(short(i.keyImage, 12, 6))}</span></td><td class="right muted">oculto</td></tr>`)).join('');
+      ? `<tr><td>${i.address ? addrLink(i.address) : '<span class="muted">unknown origin</span>'}${i.multisig ? `<br><span class="chip blue">policy: path ${i.multisig.path}, ${i.multisig.m} of ${i.multisig.n}${i.multisig.delay ? `, wait ${i.multisig.delay.toLocaleString('en-US')} blocks` : ''}</span>` : ''}${i.quantum ? '<br><span class="chip blue">hybrid signature: Schnorr + ML-DSA-44 (quantum-resistant)</span>' : ''}${i.nameReveal ? `<br><span class="chip blue">reveal of the name @${esc(i.nameReveal)}</span>` : ''}${i.swapSecret ? `<br><span class="chip blue">atomic swap: claim with revealed secret</span> <span class="mono">${esc(short(i.swapSecret, 12, 6))}</span>` : ''}<br><span class="muted">from ${txLink(i.prevTx)} #${i.index}</span></td><td class="amt right">${i.amount !== null ? formatKRV(i.amount) : '—'}</td></tr>`
+      : i.fcmp ? `<tr><td><span class="chip priv">private input</span> <b>one</b> of the ${i.anonymitySet.toLocaleString('en-US')} private outputs that have ever existed is the one spent — nobody knows which<br><span class="muted">full-chain membership proof · key image</span> <span class="mono">${esc(short(i.keyImage, 12, 6))}</span></td><td class="right muted">hidden</td></tr>`
+      : `<tr><td><span class="chip priv">private input</span> ring of ${i.ring.length}: <b>one</b> of these outputs is the one spent — nobody knows which<details><summary class="muted">see the ring</summary>${i.ring.map((m) => `${txLink(m.tx)} #${m.index}`).join('<br>')}</details><span class="muted">key image</span> <span class="mono">${esc(short(i.keyImage, 12, 6))}</span></td><td class="right muted">hidden</td></tr>`)).join('');
     const outs = d.outputs.map((o) => (o.type === 'transparent'
       ? `<tr><td>${addrLink(o.address)}</td><td class="amt right">${formatKRV(o.amount)}</td></tr>`
-      : `<tr><td><span class="chip priv">saída privada</span> destinatário e valor ocultos<br><span class="muted">chave de uso único</span> <span class="mono">${esc(short(o.oneTimeKey, 12, 6))}</span></td><td class="right muted">oculto</td></tr>`)).join('');
-    return page(params, `Transação ${short(txid)}`, `
-<h1>Transação <span class="mono">${esc(short(txid, 16, 8))}</span> <span class="chip ${k.cls}">${esc(k.label)}</span></h1>
+      : `<tr><td><span class="chip priv">private output</span> recipient and amount hidden<br><span class="muted">one-time key</span> <span class="mono">${esc(short(o.oneTimeKey, 12, 6))}</span></td><td class="right muted">hidden</td></tr>`)).join('');
+    return page(params, `Transaction ${short(txid)}`, `
+<h1>Transaction <span class="mono">${esc(short(txid, 16, 8))}</span> <span class="chip ${k.cls}">${esc(k.label)}</span></h1>
 <section class="panel"><table class="kv">
 <tr><td>Txid</td><td class="mono">${esc(txid)}</td></tr>
-<tr><td>Situação</td><td>${st}</td></tr>
-<tr><td>Incluída no bloco</td><td>${d.includedIn ? blockLink(d.includedIn) : '<span class="muted">—</span>'}</td></tr>
-<tr><td>Aceita pelo bloco da cadeia</td><td>${d.acceptingBlock ? blockLink(d.acceptingBlock) : '<span class="muted">—</span>'}</td></tr>
-<tr><td>Taxa</td><td>${tx.isCoinbase() ? '<span class="muted">—</span>' : formatKRV(d.fee)}</td></tr>
-<tr><td>Tamanho / massa</td><td>${d.size.toLocaleString('pt-BR')} bytes / ${d.mass.toLocaleString('pt-BR')} g</td></tr>
-${d.memo ? '<tr><td>Memo</td><td><span class="chip priv">cifrado</span> <span class="muted">145 bytes de tamanho fixo — só o destinatário lê (e nem dá para saber se há texto)</span></td></tr>' : ''}
-${d.rangeProof ? `<tr><td>Prova de intervalo</td><td>Bulletproof de ${d.rangeProof} bytes: prova que nenhum valor oculto é negativo (sem inflação escondida)</td></tr>` : ''}
+<tr><td>Status</td><td>${st}</td></tr>
+<tr><td>Included in block</td><td>${d.includedIn ? blockLink(d.includedIn) : '<span class="muted">—</span>'}</td></tr>
+<tr><td>Accepted by chain block</td><td>${d.acceptingBlock ? blockLink(d.acceptingBlock) : '<span class="muted">—</span>'}</td></tr>
+<tr><td>Fee</td><td>${tx.isCoinbase() ? '<span class="muted">—</span>' : formatKRV(d.fee)}</td></tr>
+<tr><td>Size / mass</td><td>${d.size.toLocaleString('en-US')} bytes / ${d.mass.toLocaleString('en-US')} g</td></tr>
+${d.memo ? '<tr><td>Memo</td><td><span class="chip priv">encrypted</span> <span class="muted">fixed size of 145 bytes — only the recipient reads it (you cannot even tell whether there is text)</span></td></tr>' : ''}
+${d.rangeProof ? `<tr><td>Range proof</td><td>Bulletproof of ${d.rangeProof} bytes: proves that no hidden amount is negative (no hidden inflation)</td></tr>` : ''}
 </table></section>
-<div class="cols"><section class="panel"><h2>Entradas</h2><table>${ins || '<tr><td class="muted">nenhuma — moedas novas da recompensa de mineração</td></tr>'}</table></section>
-<section class="panel"><h2>Saídas</h2><table>${outs}</table></section></div>`);
+<div class="cols"><section class="panel"><h2>Inputs</h2><table>${ins || '<tr><td class="muted">none — new coins from the mining reward</td></tr>'}</table></section>
+<section class="panel"><h2>Outputs</h2><table>${outs}</table></section></div>`);
   }
 
-  // ------------------------------------------------------------ endereço
+  // ------------------------------------------------------------ address
   async function addressData(addr) {
     const a = decodeAddress(params, addr);
     if (a.type === 's') return { type: 's' };
@@ -356,107 +356,107 @@ ${d.rangeProof ? `<tr><td>Prova de intervalo</td><td>Bulletproof de ${d.rangePro
           if (prev && toHex(prev.lock) === lockHex) delta -= prev.amount;
         }
         history.push({ txid: id, delta, status: info.status, kind: kind(tx).label });
-      } catch { /* ignora */ }
+      } catch { /* ignore */ }
     }
     return { type: h.type, balance: h.utxos.reduce((x, u) => x + BigInt(u.amount), 0n), utxos: h.utxos, history };
   }
   async function addressPage(addr) {
     const d = await addressData(addr);
     if (d.type === 's') {
-      return page(params, 'Endereço privado', `<h1>Endereço privado</h1>
+      return page(params, 'Private address', `<h1>Private address</h1>
 <section class="panel"><p class="mono">${esc(addr)}</p>
-<div class="note">🔒 <b>Não há nada para mostrar — e isso é a privacidade funcionando.</b><br>
-Pagamentos a endereços privados usam uma chave de uso único diferente a cada vez, com valor cifrado. Na rede não existe nenhum registro ligando estas saídas a este endereço; nem este explorador, nem o nó, nem ninguém consegue somar o saldo.<br>
-Para auditoria, o dono pode entregar a sua <b>chave de visualização</b> (krw1…) ou uma <b>prova de pagamento</b> (krp1…) de um pagamento específico.</div></section>`);
+<div class="note">🔒 <b>There is nothing to show — and that is privacy working.</b><br>
+Payments to private addresses use a different one-time key each time, with an encrypted amount. On the network there is no record linking these outputs to this address; neither this explorer, nor the node, nor anyone else can add up the balance.<br>
+For auditing, the owner can hand over their <b>view key</b> (krw1…) or a <b>payment proof</b> (krp1…) for a specific payment.</div></section>`);
     }
-    const rows = d.history.map((x) => `<tr><td>${txLink(x.txid)}</td><td><span class="chip">${esc(x.kind)}</span></td><td class="amt right" style="color:${x.delta >= 0n ? 'var(--accent)' : 'var(--red)'}">${x.delta >= 0n ? '+' : '−'}${formatKRV(x.delta >= 0n ? x.delta : -x.delta)}</td><td class="muted">${x.status === 'accepted' ? 'aceita' : esc(x.status)}</td></tr>`).join('');
-    return page(params, `Endereço ${short(addr, 12, 6)}`, `
-<h1>${d.type === 'm' ? 'Endereço de política (multiassinatura / herança)' : d.type === 'q' ? 'Endereço quântico (krq)' : 'Endereço transparente'}</h1>
+    const rows = d.history.map((x) => `<tr><td>${txLink(x.txid)}</td><td><span class="chip">${esc(x.kind)}</span></td><td class="amt right" style="color:${x.delta >= 0n ? 'var(--accent)' : 'var(--red)'}">${x.delta >= 0n ? '+' : '−'}${formatKRV(x.delta >= 0n ? x.delta : -x.delta)}</td><td class="muted">${x.status === 'accepted' ? 'accepted' : esc(x.status)}</td></tr>`).join('');
+    return page(params, `Address ${short(addr, 12, 6)}`, `
+<h1>${d.type === 'm' ? 'Policy address (multisig / inheritance)' : d.type === 'q' ? 'Quantum-safe address (krq)' : 'Transparent address'}</h1>
 <section class="panel"><p class="mono">${esc(addr)}</p><div class="big">${formatKRV(d.balance)}</div>
-<p class="muted">${d.utxos.length} saída(s) não gasta(s)${d.utxos.some((u) => !u.mature) ? ' · parte ainda amadurecendo (recompensa de mineração recente)' : ''}</p>
-${d.type === 'q' ? '<div class="note">Gastar daqui exige duas assinaturas ao mesmo tempo: Schnorr (secp256k1) e ML-DSA-44 (NIST FIPS 204, resistente a computadores quânticos). As chaves ficam escondidas atrás de um hash até o primeiro gasto.</div>' : ''}
-${d.type === 'm' ? '<div class="note">As regras deste endereço (quais chaves, quantas assinaturas, prazos) estão escondidas atrás de um hash e só aparecem na rede quando o saldo é gasto.</div>' : ''}</section>
-<section class="panel"><h2>Histórico recente</h2><table><tr><th>Transação</th><th>Tipo</th><th class="right">Efeito no saldo</th><th>Situação</th></tr>${rows || '<tr><td class="muted" colspan="4">nenhuma transação ainda</td></tr>'}</table></section>`);
+<p class="muted">${d.utxos.length} unspent output(s)${d.utxos.some((u) => !u.mature) ? ' · part still maturing (recent mining reward)' : ''}</p>
+${d.type === 'q' ? '<div class="note">Spending from here requires two signatures at the same time: Schnorr (secp256k1) and ML-DSA-44 (NIST FIPS 204, resistant to quantum computers). The keys stay hidden behind a hash until the first spend.</div>' : ''}
+${d.type === 'm' ? '<div class="note">This address\'s rules (which keys, how many signatures, deadlines) are hidden behind a hash and only appear on the network when the balance is spent.</div>' : ''}</section>
+<section class="panel"><h2>Recent history</h2><table><tr><th>Transaction</th><th>Type</th><th class="right">Effect on balance</th><th>Status</th></tr>${rows || '<tr><td class="muted" colspan="4">no transactions yet</td></tr>'}</table></section>`);
   }
 
-  // ------------------------------------------------------------ busca
+  // ------------------------------------------------------------ search
   async function search(q) {
     q = String(q ?? '').trim();
     if (isHash(q.toLowerCase())) {
       const h = q.toLowerCase();
-      try { await call('getblock', { hash: h }); return `/bloco/${h}`; } catch { /* não é bloco */ }
-      try { await call('gettransaction', { txid: h }); return `/tx/${h}`; } catch { /* não é tx */ }
+      try { await call('getblock', { hash: h }); return `/block/${h}`; } catch { /* not a block */ }
+      try { await call('gettransaction', { txid: h }); return `/tx/${h}`; } catch { /* not a tx */ }
       return null;
     }
     if (q.startsWith('@') || isValidName(normalizeName(q))) {
       const n = normalizeName(q);
-      if (isValidName(n) && (q.startsWith('@') || (await call('resolvename', { name: n })).status !== 'livre')) return `/nome/${n}`;
+      if (isValidName(n) && (q.startsWith('@') || (await call('resolvename', { name: n })).status !== 'free')) return `/name/${n}`;
     }
-    try { decodeAddress(params, q); return `/endereco/${encodeURIComponent(q.toLowerCase())}`; } catch { return null; }
+    try { decodeAddress(params, q); return `/address/${encodeURIComponent(q.toLowerCase())}`; } catch { return null; }
   }
 
-  // ------------------------------------------------------------ @nome
+  // ------------------------------------------------------------ @name
   async function namePage(raw) {
     const n = normalizeName(raw);
-    if (!isValidName(n)) throw new Error('nome inválido');
+    if (!isValidName(n)) throw new Error('invalid name');
     const d = await call('resolvename', { name: n });
-    const when = (sec) => new Date(Date.now() + sec * 1000).toLocaleDateString('pt-BR');
-    if (d.status === 'livre') {
-      return page(params, `@${n}`, `<h1>@${esc(n)}</h1><section class="panel"><div class="big">livre</div>
-<p class="muted">Ninguém registrou este nome (ou o registro venceu e passou da carência).</p>
-<div class="note">Registrar custa ${formatKRV(BigInt(d.fee))} por ano — a taxa vai inteira para o Fundo de Segurança, que paga os mineradores do futuro.</div></section>`);
+    const when = (sec) => new Date(Date.now() + sec * 1000).toLocaleDateString('en-US');
+    if (d.status === 'free') {
+      return page(params, `@${n}`, `<h1>@${esc(n)}</h1><section class="panel"><div class="big">available</div>
+<p class="muted">Nobody has registered this name (or the registration expired and its grace period is over).</p>
+<div class="note">Registering costs ${formatKRV(BigInt(d.fee))} per year — the whole fee goes to the Security Fund, which pays future miners.</div></section>`);
     }
-    const types = { t: 'transparente', s: 'privado', q: 'quântico', m: 'multiassinatura' };
-    return page(params, `@${n}`, `<h1>@${esc(n)} <span class="chip ${d.status === 'ativo' ? 'chain' : 'red'}">${esc(d.status)}</span></h1>
+    const types = { t: 'transparent', s: 'private', q: 'quantum-safe', m: 'multisig' };
+    return page(params, `@${n}`, `<h1>@${esc(n)} <span class="chip ${d.status === 'active' ? 'chain' : 'red'}">${esc(d.status)}</span></h1>
 <section class="panel"><table class="kv">
-<tr><td>Aponta para</td><td>${d.targetType === 's' ? `<span class="mono">${esc(short(d.target, 18, 10))}</span> <span class="chip priv">endereço privado</span>` : addrLink(d.target)} <span class="muted">(${esc(types[d.targetType] ?? d.targetType)})</span></td></tr>
-<tr><td>Dono</td><td>${addrLink(d.owner)}</td></tr>
-<tr><td>Vence em</td><td>${esc(when(d.expiresIn))}${d.status !== 'ativo' ? ` — carência até ${esc(when(d.graceEndsIn))}: só o dono pode renovar` : ''}</td></tr>
-<tr><td>Depósito</td><td>${formatKRV(BigInt(d.deposit))} <span class="muted">(volta ao dono se ele liberar o nome)</span></td></tr>
-<tr><td>Último registro</td><td>${txLink(d.txid)}</td></tr>
-<tr><td>Renovação</td><td>${formatKRV(BigInt(d.fee))} por ano</td></tr>
+<tr><td>Points to</td><td>${d.targetType === 's' ? `<span class="mono">${esc(short(d.target, 18, 10))}</span> <span class="chip priv">private address</span>` : addrLink(d.target)} <span class="muted">(${esc(types[d.targetType] ?? d.targetType)})</span></td></tr>
+<tr><td>Owner</td><td>${addrLink(d.owner)}</td></tr>
+<tr><td>Expires on</td><td>${esc(when(d.expiresIn))}${d.status !== 'active' ? ` — grace period until ${esc(when(d.graceEndsIn))}: only the owner can renew` : ''}</td></tr>
+<tr><td>Deposit</td><td>${formatKRV(BigInt(d.deposit))} <span class="muted">(returned to the owner if they release the name)</span></td></tr>
+<tr><td>Latest record</td><td>${txLink(d.txid)}</td></tr>
+<tr><td>Renewal</td><td>${formatKRV(BigInt(d.fee))} per year</td></tr>
 </table>
-${d.targetType === 's' ? '<div class="note">O nome é público, mas os pagamentos para ele não: cada um vai para um endereço de uso único, com valor oculto.</div>' : ''}</section>`);
+${d.targetType === 's' ? '<div class="note">The name is public, but payments to it are not: each one goes to a one-time address, with a hidden amount.</div>' : ''}</section>`);
   }
 
-  // ------------------------------------------------------------ roteamento
+  // ------------------------------------------------------------ routing
   const server = http.createServer(async (req, res) => {
     const send = (code, body, type = 'text/html; charset=utf-8') => {
       res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:" });
       res.end(body);
     };
-    const notFound = (msg) => send(404, page(params, 'Não encontrado', `<h1>Não encontrado</h1><section class="panel"><p>${esc(msg)}</p><p><a href="/">Voltar ao painel</a></p></section>`));
+    const notFound = (msg) => send(404, page(params, 'Not found', `<h1>Not found</h1><section class="panel"><p>${esc(msg)}</p><p><a href="/">Back to the dashboard</a></p></section>`));
     try {
-      if (req.method !== 'GET') return send(405, 'método não permitido', 'text/plain');
+      if (req.method !== 'GET') return send(405, 'method not allowed', 'text/plain');
       const url = new URL(req.url, 'http://x');
       const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-      const [a, b] = parts;
+      const legacy = (s) => ({ bloco: 'block', endereco: 'address', nome: 'name', busca: 'search', painel: 'panel' })[s] ?? s; const a = legacy(parts[0]), b = a === 'api' ? legacy(parts[1]) : parts[1]; // links from older versions still work
       if (!a) return send(200, await homePage());
-      if (a === 'busca') {
+      if (a === 'search') {
         const to = await search(url.searchParams.get('q'));
-        if (!to) return notFound(`Nada encontrado para "${url.searchParams.get('q') ?? ''}". Procure por um hash de bloco, um txid ou um endereço desta rede.`);
+        if (!to) return notFound(`Nothing found for "${url.searchParams.get('q') ?? ''}". Search for a block hash, a txid or an address on this network.`);
         res.writeHead(302, { location: to }); return res.end();
       }
-      if (a === 'bloco' && isHash(b ?? '')) return send(200, await blockPage(b));
+      if (a === 'block' && isHash(b ?? '')) return send(200, await blockPage(b));
       if (a === 'tx' && isHash(b ?? '')) return send(200, await txPage(b));
-      if (a === 'endereco' && b) return send(200, await addressPage(b));
-      if (a === 'nome' && b) return send(200, await namePage(b));
+      if (a === 'address' && b) return send(200, await addressPage(b));
+      if (a === 'name' && b) return send(200, await namePage(b));
       if (a === 'api') {
         const j = (o) => send(200, json(o), 'application/json; charset=utf-8');
         const c = parts[2];
-        if (b === 'painel') return j(await panel());
+        if (b === 'panel') return j(await panel());
         if (b === 'info') return j(await call('getinfo'));
         if (b === 'dag') return j(await call('getdag', { limit: Number(url.searchParams.get('n') ?? 80) }));
-        if (b === 'bloco' && isHash(c ?? '')) return j(await blockData(c));
+        if (b === 'block' && isHash(c ?? '')) return j(await blockData(c));
         if (b === 'tx' && isHash(c ?? '')) return j(await txDetail(c));
-        if (b === 'endereco' && c) return j(await addressData(c));
-        if (b === 'nome' && c) return j(await call('resolvename', { name: c }));
-        return send(404, json({ error: 'rota desconhecida' }), 'application/json');
+        if (b === 'address' && c) return j(await addressData(c));
+        if (b === 'name' && c) return j(await call('resolvename', { name: c }));
+        return send(404, json({ error: 'unknown route' }), 'application/json');
       }
-      return notFound('Página inexistente.');
+      return notFound('Page does not exist.');
     } catch (e) {
-      const msg = /desconhecid|inválid|outra rede|bech32/i.test(e.message) ? e.message : 'erro ao consultar o nó';
-      if (!/desconhecid|inválid|outra rede|bech32/i.test(e.message)) log('explorador: ' + e.message);
+      const msg = /unknown|invalid|another network|bech32/i.test(e.message) ? e.message : 'error querying the node';
+      if (!/unknown|invalid|another network|bech32/i.test(e.message)) log('explorer: ' + e.message);
       return notFound(msg);
     }
   });

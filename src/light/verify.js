@@ -1,13 +1,13 @@
-// Verificação de "SPV" para carteiras leves: a carteira não confia no servidor.
+// "SPV" verification for light wallets: the wallet does not trust the server.
 //
-// Para cada transação que lhe paga, ela pede uma prova de aceitação e confere sozinha:
-//   1. o caminho de Merkle leva o txid até o acceptedIdMerkleRoot do cabeçalho do bloco que
-//      aceitou a transação (o txid é o hash do conteúdo, que a carteira também recalcula);
-//   2. esse cabeçalho e os N seguintes da cadeia selecionada têm prova de trabalho válida,
-//      cada um aponta para o anterior como pai, e blue score/blue work só crescem;
-//   3. a dificuldade de cada um não é muito menor que a maior já vista pela carteira
-//      (impede um servidor de "minerar" cabeçalhos falsos baratos).
-// Inventar um pagamento exigiria minerar N blocos com dificuldade real — caro de propósito.
+// For every transaction that pays it, it asks for an acceptance proof and checks on its own:
+//   1. the Merkle path leads the txid to the acceptedIdMerkleRoot of the header of the block that
+//      accepted the transaction (the txid is the hash of the content, which the wallet also recomputes);
+//   2. that header and the next N of the selected chain have valid proof of work, each points to
+//      the previous one as a parent, and blue score/blue work only grow;
+//   3. the difficulty of each one is not much lower than the highest the wallet has seen
+//      (prevents a server from cheaply "mining" fake headers).
+// Inventing a payment would require mining N blocks at real difficulty — expensive on purpose.
 
 import { Header, verifyMerkleProof } from '../consensus/block.js';
 import { checkPow, calcWork } from '../consensus/pow.js';
@@ -20,36 +20,36 @@ export function parseHeader(hex) {
   return h;
 }
 
-/** Confere a PoW de um cabeçalho e devolve o trabalho dele (para aprender a dificuldade atual). */
+/** Checks the PoW of a header and returns its work (to learn the current difficulty). */
 export function headerWork(hex) {
   const h = parseHeader(hex);
-  if (!checkPow(h)) throw new Error('cabeçalho da ponta sem prova de trabalho válida');
+  if (!checkPow(h)) throw new Error('tip header without valid proof of work');
   return { header: h, work: calcWork(h.bits) };
 }
 
 /**
- * Lança erro se a prova for inválida. minDepth: blocos exigidos por cima;
- * minWork: trabalho mínimo por bloco (BigInt). Retorna { block, depth, workOnTop, maxWork }.
+ * Throws if the proof is invalid. minDepth: blocks required on top;
+ * minWork: minimum work per block (BigInt). Returns { block, depth, workOnTop, maxWork }.
  */
 export function verifyAcceptanceProof(txid, proof, { minDepth, minWork = 0n }) {
   const hdrs = [proof.header, ...(proof.chain ?? [])].map(parseHeader);
-  if (hdrs[0].hashHex !== proof.block) throw new Error('o cabeçalho não corresponde ao bloco informado');
+  if (hdrs[0].hashHex !== proof.block) throw new Error('the header does not match the reported block');
   if (!verifyMerkleProof(fromHex(txid), proof.merkle, hdrs[0].acceptedIdMerkleRoot)) {
-    throw new Error('caminho de Merkle inválido: esse bloco não aceitou a transação');
+    throw new Error('invalid Merkle path: that block did not accept the transaction');
   }
   let workOnTop = 0n, maxWork = 0n;
   hdrs.forEach((h, i) => {
-    if (!checkPow(h)) throw new Error('cabeçalho sem prova de trabalho válida');
+    if (!checkPow(h)) throw new Error('header without valid proof of work');
     const w = calcWork(h.bits);
-    if (w < minWork) throw new Error('dificuldade baixa demais para a rede (cabeçalho suspeito)');
+    if (w < minWork) throw new Error('difficulty too low for the network (suspicious header)');
     if (w > maxWork) maxWork = w;
     if (i > 0) {
       const prev = hdrs[i - 1];
-      if (!h.parents.some((p) => p.equals(prev.hash))) throw new Error('cabeçalhos não encadeados');
-      if (h.blueScore <= prev.blueScore || h.blueWork <= prev.blueWork) throw new Error('cadeia de cabeçalhos inconsistente');
+      if (!h.parents.some((p) => p.equals(prev.hash))) throw new Error('headers are not chained');
+      if (h.blueScore <= prev.blueScore || h.blueWork <= prev.blueWork) throw new Error('inconsistent header chain');
       workOnTop += w;
     }
   });
-  if (hdrs.length - 1 < minDepth) throw new Error(`só ${hdrs.length - 1} blocos por cima (exigidos ${minDepth})`);
+  if (hdrs.length - 1 < minDepth) throw new Error(`only ${hdrs.length - 1} blocks on top (${minDepth} required)`);
   return { block: proof.block, depth: hdrs.length - 1, workOnTop, maxWork };
 }

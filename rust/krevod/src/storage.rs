@@ -1,5 +1,5 @@
-//! Arquivo de blocos só-anexação, no MESMO formato do nó JavaScript (u32le(tamanho) ‖ bloco):
-//! um nó Rust pode abrir os dados de um nó JavaScript e vice-versa.
+//! Append-only block file, in the SAME format as the JavaScript node (u32le(length) ‖ block):
+//! a Rust node can open a JavaScript node's data and vice versa.
 
 use crate::block::Block;
 use std::fs::{self, OpenOptions};
@@ -11,7 +11,10 @@ pub struct BlockFile { pub file: PathBuf }
 impl BlockFile {
     pub fn new(dir: &std::path::Path) -> std::io::Result<Self> {
         fs::create_dir_all(dir)?;
-        Ok(BlockFile { file: dir.join("blocos.dat") })
+        let file = dir.join("blocks.dat");
+        // data directories created by older versions used the Portuguese file name
+        let legacy = dir.join("blocos.dat");
+        Ok(BlockFile { file: if !file.exists() && legacy.exists() { legacy } else { file } })
     }
     pub fn read_all(&self) -> Vec<Block> {
         let Ok(buf) = fs::read(&self.file) else { return vec![] };
@@ -19,7 +22,7 @@ impl BlockFile {
         let mut o = 0usize;
         while o + 4 <= buf.len() {
             let len = u32::from_le_bytes(buf[o..o + 4].try_into().unwrap()) as usize;
-            if o + 4 + len > buf.len() { break; } // registro truncado (desligamento abrupto)
+            if o + 4 + len > buf.len() { break; } // truncated record (abrupt shutdown)
             match Block::deserialize(&buf[o + 4..o + 4 + len]) { Ok(b) => out.push(b), Err(_) => break }
             o += 4 + len;
         }

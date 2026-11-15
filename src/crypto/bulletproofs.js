@@ -1,12 +1,12 @@
-// Bulletproofs — provas de intervalo agregadas (Bünz, Bootle, Boneh, Poelstra,
-// Wuille, Maxwell, 2018). Provam que cada valor escondido em um compromisso
-// C = x·G + v·H está em [0, 2^64), sem revelar v. Sem isso, alguém poderia
-// criar uma saída "negativa" e inflar a oferta.
+// Bulletproofs — aggregated range proofs (Bünz, Bootle, Boneh, Poelstra,
+// Wuille, Maxwell, 2018). They prove that each amount hidden in a commitment
+// C = x·G + v·H is in [0, 2^64), without revealing v. Without them, someone could
+// create a "negative" output and inflate the supply.
 //
-// Tamanho: 2·log2(64·m) + 9 elementos — ~690 bytes para 1 saída, ~755 para 2.
-// Nenhuma configuração confiável (trusted setup): todos os geradores vêm de hash.
+// Size: 2·log2(64·m) + 9 elements — ~690 bytes for 1 output, ~755 for 2.
+// No trusted setup: all generators come from hashing.
 //
-// Convenção: valor no gerador Hv, cegamento no gerador G (C = xG + vHv).
+// Convention: amount on generator Hv, blinding on generator G (C = xG + vHv).
 
 import { randomBytes } from 'node:crypto';
 import { G, N, modN, invN, multiexp, hashToPoint, hashToScalar, randomScalar, hedgedScalar,
@@ -27,14 +27,14 @@ function ensureGens(n) {
     Hi.push(hashToPoint('bp/H', u32le(i)));
   }
 }
-const U = hashToPoint('bp/U', 'produto interno');
+const U = hashToPoint('bp/U', 'produto interno'); // ("inner product": this Portuguese string is part of consensus — never translate it)
 
 class Transcript {
   constructor(label) { this.st = H('bp/transcript', label); }
   add(label, x) { this.st = H('bp/transcript', this.st, label, x); }
   ch(label) {
     const c = hashToScalar('bp/challenge', this.st, label);
-    if (c === 0n) throw new Error('desafio zero');
+    if (c === 0n) throw new Error('zero challenge');
     this.add('ch', c);
     return c;
   }
@@ -59,15 +59,15 @@ function startTranscript(V, m0) {
 }
 
 /**
- * Cria prova agregada para values[j] com cegamentos gammas[j].
- * Retorna { V: Point[], proof: Buffer }.
+ * Creates an aggregated proof for values[j] with blinding factors gammas[j].
+ * Returns { V: Point[], proof: Buffer }.
  */
 export function proveRange(values, gammas) {
   const m0 = values.length;
-  if (m0 < 1 || m0 > MAX_AGGREGATION || gammas.length !== m0) throw new Error('bp: número de valores inválido');
-  for (const v of values) if (v < 0n || v >= (1n << 64n)) throw new Error('bp: valor fora do intervalo');
+  if (m0 < 1 || m0 > MAX_AGGREGATION || gammas.length !== m0) throw new Error('bp: invalid number of values');
+  for (const v of values) if (v < 0n || v >= (1n << 64n)) throw new Error('bp: amount out of range');
   if (core.available()) {
-    // núcleo em Rust: bits dos valores e máscaras em tempo constante; prova conferida antes de sair
+    // Rust core: amount bits and masks in constant time; the proof is checked before it leaves
     const r = core.proveRange(values, gammas.map(modN));
     return { V: r.V.map((b) => Point.fromBytes(b)), proof: r.proof };
   }
@@ -86,7 +86,7 @@ export function proveRange(values, gammas) {
     }
   }
   const GG = Gi.slice(0, nn), HH = Hi.slice(0, nn);
-  // nonces de uma semente "hedged" (máscaras + valores + compromissos + acaso)
+  // nonces from a "hedged" seed (masks + amounts + commitments + randomness)
   const seed = scalarToBytes(hedgedScalar('bp/seed', ...gamma.map(scalarToBytes), ...v.map((x) => scalarToBytes(x)), ...V));
   const nonce = (tag, i = 0) => hashToScalar('bp/nonce', seed, tag, i);
   const alpha = nonce('alpha'), rho = nonce('rho');
@@ -123,7 +123,7 @@ export function proveRange(values, gammas) {
   const w = T.ch('w');
   const Q = U.mul(w);
 
-  // Argumento de produto interno (protocolo 2 do artigo, com Fiat–Shamir).
+  // Inner-product argument (protocol 2 of the paper, with Fiat–Shamir).
   const yinv = invN(y), ypinv = powers(yinv, nn);
   let gv = GG, hv = HH.map((h, i) => h.mul(ypinv[i]));
   let a = l, b = r;
@@ -158,7 +158,7 @@ export function rangeProofSize(m0) {
 }
 
 function parseProof(buf, m0) {
-  if (buf.length !== rangeProofSize(m0)) throw new Error('bp: tamanho inválido');
+  if (buf.length !== rangeProofSize(m0)) throw new Error('bp: invalid size');
   let o = 0;
   const pt = () => { const p = Point.fromBytes(buf.subarray(o, o + 33)); o += 33; return p; };
   const sc = () => { const s = scalarFromBytes(buf.subarray(o, o + 32)); o += 32; return s; };
@@ -171,7 +171,7 @@ function parseProof(buf, m0) {
   return { A, S, T1, T2, taux, mu, that, L, R, a, b };
 }
 
-/** Verifica a prova contra os compromissos V (Point[]). Uma única multiexponenciação. */
+/** Verifies the proof against the commitments V (Point[]). A single multi-exponentiation. */
 export function verifyRange(V, proofBuf) {
   try {
     const m0 = V.length;
@@ -192,12 +192,12 @@ export function verifyRange(V, proofBuf) {
 
     const uinv = u.map(invN);
     const u2 = u.map((v) => modN(v * v)), uinv2 = uinv.map((v) => modN(v * v));
-    // s_i = Π_k u_k^{±1}; bit (rounds−1−k) de i decide o sinal da rodada k.
+    // s_i = Π_k u_k^{±1}; bit (rounds−1−k) of i decides the sign of round k.
     const s = new Array(nn);
     s[0] = uinv.reduce((acc, v) => modN(acc * v), 1n);
     for (let i = 1; i < nn; i++) {
-      const j = 31 - Math.clz32(i);          // bit mais alto de i
-      const k = rounds - 1 - j;              // rodada que divide por esse bit
+      const j = 31 - Math.clz32(i);          // highest bit of i
+      const k = rounds - 1 - j;              // round that divides by that bit
       s[i] = modN(s[i - (1 << j)] * u2[k]);
     }
     const yinv = invN(y), ypinv = powers(yinv, nn), yp = powers(y, nn);
@@ -207,7 +207,7 @@ export function verifyRange(V, proofBuf) {
     const ones64 = (1n << 64n) - 1n;
     for (let j = 0; j < m; j++) delta = modN(delta - zp[3 + j] * ones64);
 
-    const c = bytesToBigBE(randomBytes(32)) % N; // peso aleatório do verificador
+    const c = bytesToBigBE(randomBytes(32)) % N; // random verifier weight
     const scalars = [], points = [];
     const push = (k, p) => { scalars.push(k); points.push(p); };
     push(1n, pf.A);

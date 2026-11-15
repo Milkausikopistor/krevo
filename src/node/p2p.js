@@ -1,12 +1,12 @@
-// Rede ponto a ponto (TCP). Mensagens: [magia u32][tamanho u32][JSON].
+// Peer-to-peer network (TCP). Messages: [magic u32][length u32][JSON].
 //
-// Sincronização do DAG: ao conectar, cada nó pede o inventário de blocos a
-// partir do seu blue score; blocos com pais desconhecidos ficam como órfãos e
-// os pais são pedidos ao mesmo par.
+// DAG synchronization: on connecting, each node asks for the block inventory
+// from its blue score; blocks with unknown parents stay as orphans and
+// the parents are requested from the same peer.
 //
-// Privacidade de rede — Dandelion++ (simplificado): uma transação nova primeiro
-// "anda pela haste" (é repassada a UM par por vez) e só depois "floresce"
-// (é anunciada a todos). Assim, quem observa a rede não descobre o IP de origem.
+// Network privacy — Dandelion++ (simplified): a new transaction first
+// "walks along the stem" (it is relayed to ONE peer at a time) and only then "fluffs"
+// (it is announced to everyone). So whoever watches the network does not learn the origin IP.
 
 import net from 'node:net';
 import { randomBytes } from 'node:crypto';
@@ -31,7 +31,7 @@ export class P2P extends EventEmitter {
     this.peers = new Set();
     this.nonce = toHex(randomBytes(8));
     this.known = new Set(peers);
-    this.requested = new Map();     // hash → timestamp do pedido
+    this.requested = new Map();     // hash → request timestamp
     this.stemPeer = null;
     this.stemSince = 0;
     this.embargo = new Map();       // txid → timer
@@ -39,7 +39,7 @@ export class P2P extends EventEmitter {
 
   start() {
     this.server = net.createServer((s) => this._attach(s, false, `${s.remoteAddress}:${s.remotePort}`));
-    this.server.on('error', (e) => this.log('p2p erro: ' + e.message));
+    this.server.on('error', (e) => this.log('p2p error: ' + e.message));
     this.server.listen(this.port, this.host);
     for (const a of this.seeds) this.connect(a);
     this.timer = setInterval(() => this._maintenance(), 5000);
@@ -87,14 +87,14 @@ export class P2P extends EventEmitter {
   _onData(peer, data) {
     peer.buf = Buffer.concat([peer.buf, data]);
     while (peer.buf.length >= 8) {
-      if (peer.buf.readUInt32LE(0) !== this.params.p2pMagic) return this._ban(peer, 'magia errada');
+      if (peer.buf.readUInt32LE(0) !== this.params.p2pMagic) return this._ban(peer, 'wrong magic');
       const len = peer.buf.readUInt32LE(4);
-      if (len > MAX_MSG) return this._ban(peer, 'mensagem grande demais');
+      if (len > MAX_MSG) return this._ban(peer, 'message too large');
       if (peer.buf.length < 8 + len) break;
       const body = peer.buf.subarray(8, 8 + len);
       peer.buf = peer.buf.subarray(8 + len);
       let msg;
-      try { msg = JSON.parse(body.toString()); } catch { return this._ban(peer, 'JSON inválido'); }
+      try { msg = JSON.parse(body.toString()); } catch { return this._ban(peer, 'invalid JSON'); }
       try { this._handle(peer, msg); } catch (e) { this._misbehave(peer, 10, e.message); }
     }
   }
@@ -103,19 +103,19 @@ export class P2P extends EventEmitter {
     peer.score += n;
     if (peer.score >= 100) this._ban(peer, why);
   }
-  _ban(peer, why) { this.log(`desconectando ${peer.addr}: ${why}`); peer.sock.destroy(); this.peers.delete(peer); }
+  _ban(peer, why) { this.log(`disconnecting ${peer.addr}: ${why}`); peer.sock.destroy(); this.peers.delete(peer); }
 
   _handle(peer, m) {
     if (!peer.ready && m.t !== 'hello') return;
     switch (m.t) {
       case 'hello': {
-        if (m.nonce === this.nonce) return this._ban(peer, 'conexão consigo mesmo');
-        if (m.network !== this.params.name || m.genesis !== this.node.consensus.genesisHash) return this._ban(peer, 'rede diferente');
+        if (m.nonce === this.nonce) return this._ban(peer, 'connection to itself');
+        if (m.network !== this.params.name || m.genesis !== this.node.consensus.genesisHash) return this._ban(peer, 'different network');
         peer.ready = true;
         const host = peer.addr.split(':').slice(0, -1).join(':').replace('::ffff:', '');
         peer.listen = `${host}:${m.listen}`;
         this.known.add(peer.listen);
-        this.log(`par conectado: ${peer.listen} (${peer.outbound ? 'saída' : 'entrada'})`);
+        this.log(`peer connected: ${peer.listen} (${peer.outbound ? 'outbound' : 'inbound'})`);
         const from = Math.max(0, this.node.consensus.virtual.gd.blueScore - 300);
         this.send(peer, { t: 'getdag', from });
         this.send(peer, { t: 'getaddr' });
@@ -202,7 +202,7 @@ export class P2P extends EventEmitter {
     return this.stemPeer && this.stemPeer !== except ? this.stemPeer : null;
   }
 
-  /** Transação criada localmente (RPC) ou recebida de um par. */
+  /** Transaction created locally (RPC) or received from a peer. */
   receiveTx(tx, from, stem) {
     const id = tx.idHex;
     if (this.node.mempool.txs.has(id)) return { ok: true, txid: id, duplicate: true };
@@ -211,9 +211,9 @@ export class P2P extends EventEmitter {
       const next = Math.random() < STEM_PROBABILITY ? this._pickStem(from) : null;
       if (next) {
         this.send(next, { t: 'tx', data: toHex(tx.serialize()), stem: true });
-        this.node.stem.set(id, { tx, at: Date.now() }); // lembrada localmente durante a fase de haste
+        this.node.stem.set(id, { tx, at: Date.now() }); // remembered locally during the stem phase
         if (!this.embargo.has(id)) {
-          // embargo: se ninguém florescer a transação em alguns segundos, florescemos nós.
+          // embargo: if nobody fluffs the transaction within a few seconds, we fluff it ourselves.
           this.embargo.set(id, setTimeout(() => { this.embargo.delete(id); this._fluff(tx, null); }, 2000 + Math.random() * 2000));
         }
         return { ok: true, txid: id, phase: 'haste' };

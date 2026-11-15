@@ -1,19 +1,19 @@
-// CARTEIRA LEVE: usa a Krevo sem rodar um nó, falando com um servidor leve público em que ela
-// NÃO confia. O que muda em relação à carteira completa:
+// LIGHT WALLET: uses Krevo without running a node, talking to a public light server that it does
+// NOT trust. What changes compared to the full wallet:
 //
-//   • chaves: nenhuma sai do aparelho — nem a de gasto, nem a de visualização (modo padrão);
-//   • varredura: baixa só 35 bytes por saída privada (R, índice e view tag de 1 byte) e testa
-//     aqui mesmo; só ~1 em 256 saídas precisa ser baixada inteira — e cada uma vai misturada a
-//     15 iscas, então o servidor não sabe quais são suas;
-//   • gastos: pergunta por "baldes" de imagens de chave (1/256 do total), nunca pela sua;
-//   • verificação: cada moeda recebida só conta no saldo depois de uma PROVA — o txid confere
-//     com o conteúdo, a saída está na transação, a transação está na árvore de Merkle do bloco
-//     que a aceitou e há N blocos com prova de trabalho por cima (src/light/verify.js);
-//   • opcional (--delegar): varredura delegada — o servidor recebe a chave de VISUALIZAÇÃO e
-//     encontra seus pagamentos (economiza bateria; ele passa a ver o que você recebe, mas
-//     continua sem poder gastar nem ver o que você gasta).
+//   • keys: none leaves the device — neither the spend key nor the view key (default mode);
+//   • scanning: downloads only 35 bytes per private output (R, index and a 1-byte view tag) and
+//     tests them right here; only ~1 in 256 outputs needs to be downloaded in full — and each one
+//     comes mixed with 15 decoys, so the server does not know which ones are yours;
+//   • spends: asks for "buckets" of key images (1/256 of the total), never for its own;
+//   • verification: every coin received only counts in the balance after a PROOF — the txid
+//     matches the content, the output is in the transaction, the transaction is in the Merkle tree
+//     of the block that accepted it, and N blocks with proof of work sit on top (src/light/verify.js);
+//   • optional (--delegar): delegated scanning — the server receives the VIEW key and finds your
+//     payments (saves battery; it can then see what you receive, but it still cannot spend nor
+//     see what you spend).
 //
-// Montar, assinar e escolher iscas das transações continua igual à carteira completa.
+// Building, signing and picking transaction decoys stays the same as in the full wallet.
 
 import { randomInt } from 'node:crypto';
 import { fetchRetry } from '../node/rpcclient.js';
@@ -25,10 +25,10 @@ import { toHex, fromHex } from '../util/bytes.js';
 import { verifyAcceptanceProof, headerWork } from './verify.js';
 import { pqAvailable } from '../crypto/pq.js';
 
-const PAD = 16;          // cada saída pedida vai junto com 15 iscas
+const PAD = 16;          // each requested output comes with 15 decoys
 const COMPACT_BATCH = 5000;
 
-/** Cliente HTTP do servidor leve; conta os bytes recebidos (para medir o consumo). */
+/** HTTP client for the light server; counts the bytes received (to measure usage). */
 export class LightClient {
   constructor(base) { this.base = String(base).replace(/\/+$/, ''); this.bytes = 0; this.requests = 0; }
 
@@ -36,7 +36,7 @@ export class LightClient {
     let r;
     try {
       r = await fetchRetry(this.base + path, { method, body: body ? JSON.stringify(body) : undefined, headers: body ? { 'content-type': 'application/json' } : {} });
-    } catch (e) { throw new Error(`não consegui falar com o servidor leve em ${this.base} (${e.cause?.code ?? e.message})`); }
+    } catch (e) { throw new Error(`could not reach the light server at ${this.base} (${e.cause?.code ?? e.message})`); }
     const buf = Buffer.from(await r.arrayBuffer());
     this.bytes += buf.length;
     this.requests++;
@@ -51,9 +51,9 @@ export class LightClient {
   info() { return this._req('/v1/info'); }
   async compact(start, count) {
     const b = await this._req(`/v1/compact?start=${start}&count=${count}`, { binary: true });
-    if (b.length < 20) throw new Error('resposta compacta malformada');
+    if (b.length < 20) throw new Error('malformed compact response');
     const total = b.readUInt32LE(0), st = b.readUInt32LE(4), n = b.readUInt32LE(8), daaScore = Number(b.readBigUInt64LE(12));
-    if (st !== start || b.length !== 20 + 35 * n) throw new Error('resposta compacta malformada');
+    if (st !== start || b.length !== 20 + 35 * n) throw new Error('malformed compact response');
     const entries = [];
     for (let k = 0; k < n; k++) {
       const o = 20 + 35 * k;
@@ -76,22 +76,22 @@ export class LightClient {
 }
 
 /**
- * Carteira leve. `serverUrl` pode ter VÁRIOS servidores separados por vírgula
- * ("https://a,https://b"): a carteira compara as respostas e avisa quando discordam.
- *   • saídas privadas: os dados compactos dos servidores são comparados lote a lote; se
- *     diferirem (um escondeu ou mexeu em algo), a carteira varre os dois — o que um esconder,
- *     o outro mostra;
- *   • moedas transparentes que só um servidor mostra: se um deles PROVAR que a moeda foi
- *     gasta (transação que a gasta + prova de aceitação), ela está gasta; se ninguém provar,
- *     ela conta — quem a escondeu fica registrado;
- *   • gastos privados: basta um servidor saber da imagem de chave;
- *   • transmissão: a transação vai para todos (mais difícil de censurar).
+ * Light wallet. `serverUrl` may hold SEVERAL servers separated by commas
+ * ("https://a,https://b"): the wallet compares their answers and warns when they disagree.
+ *   • private outputs: the servers' compact data are compared batch by batch; if they differ
+ *     (one hid or changed something), the wallet scans both — what one hides, the other shows;
+ *
+ *   • transparent coins only one server shows: if one of them PROVES the coin was spent
+ *     (the spending transaction + acceptance proof), it is spent; if nobody proves it, it
+ *     counts — whoever hid it is recorded;
+ *   • private spends: it is enough that one server knows the key image;
+ *   • broadcasting: the transaction goes to all of them (harder to censor).
  */
 export class LightWallet extends Wallet {
   constructor(file, data, params, serverUrl, password, opts = {}) {
     super(file, data, params, serverUrl, password, opts);
     this.servers = String(serverUrl).split(',').map((u) => u.trim()).filter(Boolean).map((u) => new LightClient(u));
-    if (!this.servers.length) throw new Error('informe o servidor leve');
+    if (!this.servers.length) throw new Error('enter the light server');
     this.server = this.servers[0];
     this.tUnverified = [];
   }
@@ -99,20 +99,20 @@ export class LightWallet extends Wallet {
   get light() { return (this.data.light ??= { verified: {}, fraud: {}, fraudBy: {}, maxWork: '0', delegate: false, discrepancies: [] }); }
   get proofDepth() { return this.data.light?.depth ?? this.params.lightProofDepth; }
   get serverUrls() { return this.servers.map((s) => s.base); }
-  /** Bytes e consultas somados de todos os servidores. */
+  /** Bytes and requests summed over all servers. */
   get traffic() { return { bytes: this.servers.reduce((a, s) => a + s.bytes, 0), requests: this.servers.reduce((a, s) => a + s.requests, 0) }; }
-  /** Divergências entre servidores encontradas na última sincronização. */
+  /** Disagreements between servers found in the last sync. */
   get discrepancies() { return [...(this.data.light?.discrepancies ?? [])]; }
-  /** Liga/desliga a varredura delegada (o servidor recebe a chave de visualização). */
+  /** Turns delegated scanning on/off (the server receives the view key). */
   setDelegated(on) { this.light.delegate = !!on; this.save(); }
 
-  /** As mesmas operações que a carteira completa pede ao nó, traduzidas para o servidor leve. */
+  /** The same operations the full wallet asks of a node, translated for the light server. */
   async call(method, p = {}) {
     const s = this.server;
     switch (method) {
       case 'getutxos': return s.utxos(p.locks);
       case 'getshieldedoutputs': {
-        if (p.count) throw new Error('a carteira leve não baixa saídas completas em massa');
+        if (p.count) throw new Error('the light wallet does not download full outputs in bulk');
         const i = await s.info();
         return { total: i.outputs, daaScore: i.daaScore, outputs: [] };
       }
@@ -121,7 +121,7 @@ export class LightWallet extends Wallet {
       case 'getfcmppath': return s.fcmpPath(p.anchor, p.chunks);
       case 'getkeyimages': return this._keyImageStatus(p.keyImages);
       case 'sendrawtransaction': {
-        // para TODOS os servidores: basta um aceitar
+        // to ALL servers: it is enough that one accepts
         const rs = await Promise.allSettled(this.servers.map((x) => x.broadcast(p.tx)));
         const ok = rs.find((r) => r.status === 'fulfilled');
         if (ok) return ok.value;
@@ -135,7 +135,7 @@ export class LightWallet extends Wallet {
             const t = await x.tx(p.txid);
             if (t.status === 'accepted') return { status: 'accepted', confirmations: t.confirmations };
             last = { status: t.status };
-          } catch (e) { if (!/desconhecida/.test(e.message) && this.servers.length === 1) throw e; }
+          } catch (e) { if (!/unknown/.test(e.message) && this.servers.length === 1) throw e; }
         }
         return last;
       }
@@ -146,11 +146,11 @@ export class LightWallet extends Wallet {
         const i = await s.info();
         return { network: i.network, virtual: { daaScore: i.daaScore, blueScore: i.blueScore }, shieldedOutputs: i.outputs };
       }
-      default: throw new Error(`"${method}" não está disponível na carteira leve`);
+      default: throw new Error(`"${method}" is not available in the light wallet`);
     }
   }
 
-  /** Imagens de chave por baldes de prefixo, em todos os servidores (basta um saber do gasto). */
+  /** Key images by prefix buckets, on all servers (it is enough that one knows the spend). */
   async _keyImageStatus(kis, notes = null) {
     const res = new Map(kis.map((k) => [k, { spentBy: [], mempool: false }]));
     const active = this._active ?? this.servers, lagging = this._lagging ?? new Set();
@@ -165,23 +165,23 @@ export class LightWallet extends Wallet {
     return kis.map((k) => {
       const r = res.get(k);
       if (notes && r.spentBy.length && r.spentBy.length < active.length && !lagging.size) {
-        notes.push(`os servidores discordam se uma moeda privada já foi gasta (${active.filter((_, i) => !r.spentBy.includes(i)).map((x) => x.base).join(', ')} diz que não) — considerada gasta`);
+        notes.push(`the servers disagree on whether a private coin was already spent (${active.filter((_, i) => !r.spentBy.includes(i)).map((x) => x.base).join(', ')} says it was not) — considered spent`);
       }
       return { keyImage: k, spent: r.spentBy.length > 0, inMempool: r.mempool };
     });
   }
 
-  /** Candidatas de um intervalo, testadas AQUI pela view tag. */
+  /** Candidates of a range, tested HERE by the view tag. */
   _testCompact(entries, srvIndex, out) {
     const ok = [], Rs = [];
     for (const e of entries) {
-      try { Rs.push(Point.fromBytes(e.R)); ok.push(e); } catch { /* ponto inválido: não é nossa */ }
+      try { Rs.push(Point.fromBytes(e.R)); ok.push(e); } catch { /* invalid point: not ours */ }
     }
-    const sss = this.keys.vault.sharedMany(Rs); // a·R calculado no cofre, em lote
+    const sss = this.keys.vault.sharedMany(Rs); // a·R computed in the vault, in a batch
     ok.forEach((e, n) => { if (viewTag(sss[n], e.j) === e.viewTag) out.push({ srv: srvIndex, index: e.index }); });
   }
 
-  /** Varre [start, total de cada servidor); compara os lotes entre servidores. */
+  /** Scans [start, total of each server); compares the batches between servers. */
   async _localCandidates(start, totals, notes) {
     const out = [];
     const common = Math.min(...totals);
@@ -195,14 +195,14 @@ export class LightWallet extends Wallet {
       else {
         let k = 0;
         while (k < n && batches.every((b) => eq(b.entries[k], batches[0].entries[k]))) k++;
-        if (!diverged) notes.push(`os servidores mostram saídas privadas DIFERENTES a partir da posição ${i + k} — um deles escondeu ou alterou dados; a carteira conferiu os dois`);
+        if (!diverged) notes.push(`the servers show DIFFERENT private outputs from position ${i + k} on — one of them hid or altered data; the wallet checked both`);
         diverged = true;
         batches.forEach((b, s) => this._testCompact(b.entries, s, out));
       }
       if (!batches[0].count) break;
       i += batches[0].count;
     }
-    // o que só os servidores mais adiantados já têm
+    // what only the servers that are further ahead already have
     for (const [s, srv] of this._active.entries()) {
       for (let i = Math.max(start, common); i < totals[s];) {
         const c = await srv.compact(i, Math.min(COMPACT_BATCH, totals[s] - i));
@@ -214,7 +214,7 @@ export class LightWallet extends Wallet {
     return out;
   }
 
-  /** Varredura delegada (só no primeiro servidor): ele recebe a chave de visualização. */
+  /** Delegated scanning (first server only): it receives the view key. */
   async _delegatedCandidates(start, total) {
     const out = [];
     for (let i = start; i < total; i += 20_000) {
@@ -224,7 +224,7 @@ export class LightWallet extends Wallet {
     return out;
   }
 
-  /** Baixa as saídas pedidas de cada servidor, misturadas com iscas (PAD − 1 por saída real). */
+  /** Downloads the requested outputs from each server, mixed with decoys (PAD − 1 per real output). */
   async _fetchPadded(cands, totals) {
     const map = new Map();
     for (const [s, srv] of this._active.entries()) {
@@ -247,9 +247,9 @@ export class LightWallet extends Wallet {
   }
 
   /**
-   * Prova que a saída `key` (txid:índice) existe e foi aceita pela rede, tentando cada servidor.
-   * check(tx, índice) confere o conteúdo. "Ainda sem blocos suficientes" só adia; dado falso
-   * (txid, conteúdo, Merkle, PoW) fica registrado como fraude daquele servidor.
+   * Proves that output `key` (txid:index) exists and was accepted by the network, trying each
+   * server. check(tx, index) checks the content. "Not enough blocks yet" only postpones; false data
+   * (txid, content, Merkle, PoW) is recorded as fraud by that server.
    */
   async _verifyOutput(key, check) {
     const L = this.light;
@@ -261,9 +261,9 @@ export class LightWallet extends Wallet {
       const flag = (why) => { L.fraud[txid] = why; (L.fraudBy[txid] ??= []).push(srv.base); };
       let t, proof, tx;
       try { t = await srv.tx(txid); } catch { continue; }
-      try { tx = Transaction.deserialize(fromHex(t.tx)); } catch { flag('transação ilegível'); continue; }
-      if (tx.idHex !== txid) { flag('o conteúdo da transação não confere com o txid'); continue; }
-      if (!check(tx, Number(ix))) { flag('a saída informada não existe nessa transação'); continue; }
+      try { tx = Transaction.deserialize(fromHex(t.tx)); } catch { flag('unreadable transaction'); continue; }
+      if (tx.idHex !== txid) { flag('the transaction content does not match the txid'); continue; }
+      if (!check(tx, Number(ix))) { flag('the reported output does not exist in that transaction'); continue; }
       try { proof = await srv.proof(txid, this.proofDepth); } catch { continue; }
       if ((proof.chain?.length ?? 0) < this.proofDepth) continue;
       try {
@@ -276,7 +276,7 @@ export class LightWallet extends Wallet {
     return false;
   }
 
-  /** Algum servidor PROVA que esta moeda transparente foi gasta? (transação que a gasta + prova) */
+  /** Does any server PROVE that this transparent coin was spent? (spending transaction + proof) */
   async _spendProven(u) {
     const address = u.kind === 'q' ? this.qAddress : this.tAddress;
     for (const srv of this._active) {
@@ -293,33 +293,33 @@ export class LightWallet extends Wallet {
     return null;
   }
 
-  /** Avisos de dados falsos recebidos (txid → motivo). */
+  /** Warnings about false data received (txid → reason). */
   get fraudReports() { return { ...(this.data.light?.fraud ?? {}) }; }
 
   async sync() {
     const L = this.light, notes = [];
-    // 0) quem está no ar, na rede certa, com a ponta com PoW válida
+    // 0) who is online, on the right network, with a tip that has valid PoW
     const infos = await Promise.all(this.servers.map((s) => s.info().catch((e) => ({ error: e.message }))));
     const up = [];
     infos.forEach((info, n) => {
       const srv = this.servers[n];
-      if (info.error) { if (this.servers.length > 1) notes.push(`servidor ${srv.base} fora do ar (${info.error})`); return; }
-      if (info.network !== this.params.name) throw new Error(`o servidor ${srv.base} é da rede ${info.network}, não ${this.params.name}`);
+      if (info.error) { if (this.servers.length > 1) notes.push(`server ${srv.base} is offline (${info.error})`); return; }
+      if (info.network !== this.params.name) throw new Error(`the server ${srv.base} is on the ${info.network} network, not ${this.params.name}`);
       const tip = headerWork(info.tip.header);
       if (tip.work > BigInt(L.maxWork)) L.maxWork = tip.work.toString();
       up.push({ srv, info });
     });
-    if (!up.length) throw new Error(infos[0].error ?? 'nenhum servidor leve respondeu');
+    if (!up.length) throw new Error(infos[0].error ?? 'no light server answered');
     this._active = up.map((x) => x.srv);
     this.server = this._active[0];
     const top = Math.max(...up.map((x) => x.info.daaScore));
     const lagTol = this.params.bps * 120;
     this._lagging = new Set();
-    up.forEach((x, n) => { if (top - x.info.daaScore > lagTol) { this._lagging.add(n); notes.push(`servidor ${x.srv.base} está atrasado (${Math.round((top - x.info.daaScore) / this.params.bps)} s)`); } });
+    up.forEach((x, n) => { if (top - x.info.daaScore > lagTol) { this._lagging.add(n); notes.push(`server ${x.srv.base} is behind (${Math.round((top - x.info.daaScore) / this.params.bps)} s)`); } });
     this.data.daa = top;
     const tips = up.map((x) => x.info.daaScore);
 
-    // 1) moedas transparentes: união das respostas, conferindo o que só um servidor mostra
+    // 1) transparent coins: union of the answers, checking what only one server shows
     const tLock = toHex(this.keys.tKey(0).lock), qLock = pqAvailable() ? toHex(this.keys.qKey(0).lock) : null;
     const locks = qLock ? [tLock, qLock] : [tLock];
     const lists = await Promise.all(this._active.map((s) => s.utxos(locks).then((r) => r.utxos).catch(() => null)));
@@ -335,25 +335,25 @@ export class LightWallet extends Wallet {
     const all = [];
     for (const { u, by } of seen.values()) {
       const missing = this._active.map((_, n) => n).filter((n) => !by.has(n) && lists[n] !== null);
-      // só é "atraso" se a ponta do servidor que não mostra a moeda está ANTES do bloco que a criou
-      // (tolerância de ~1 s); fora isso, alguém está escondendo ou inventando
+      // it is only "lag" if the tip of the server that does not show the coin is BEFORE the block
+      // that created it (~1 s tolerance); otherwise someone is hiding or inventing
       const explainedByLag = missing.every((n) => tips[n] < u.daa + Math.ceil(this.params.bps));
       if (missing.length && !explainedByLag) {
         const spentBy = await this._spendProven(u);
-        if (spentBy) { notes.push(`${[...by].map((n) => this._active[n].base).join(', ')} mostrou como disponível uma moeda que já foi gasta (a carteira tem a PROVA do gasto) — ignorada`); continue; }
-        notes.push(`${missing.map((n) => this._active[n].base).join(', ')} escondeu uma moeda transparente de ${u.amount} grãos (ninguém provou que foi gasta) — ela conta`);
+        if (spentBy) { notes.push(`${[...by].map((n) => this._active[n].base).join(', ')} showed as available a coin that was already spent (the wallet has the PROOF of the spend) — ignored`); continue; }
+        notes.push(`${missing.map((n) => this._active[n].base).join(', ')} hid a transparent coin of ${u.amount} grains (nobody proved it was spent) — it counts`);
       }
       all.push(u);
     }
 
-    // 2) saídas privadas: candidatas pela view tag (comparando servidores), depois as completas
+    // 2) private outputs: candidates by view tag (comparing servers), then the full ones
     const LOOKAHEAD = 50;
     let scanKeys = this.keys.scanKeysFor(this.subCount + LOOKAHEAD);
     const totals = up.map((x) => x.info.outputs);
     const maxT = Math.max(...totals);
     up.forEach((x, n) => {
       if (totals[n] < maxT && top - x.info.daaScore <= Math.ceil(this.params.bps)) {
-        notes.push(`servidor ${x.srv.base} mostra ${maxT - totals[n]} saída(s) privada(s) a menos com a rede no mesmo ponto — escondeu dados; a carteira usou o outro`);
+        notes.push(`server ${x.srv.base} shows ${maxT - totals[n]} fewer private output(s) with the network at the same point — it hid data; the wallet used the other one`);
       }
     });
     const start = Math.max(0, Math.min(this.data.sScanned ?? 0, ...totals) - 200);
@@ -365,7 +365,7 @@ export class LightWallet extends Wallet {
       if (!e || owned.has(e.outpoint)) continue;
       const o = { P: Point.fromBytes(fromHex(e.P)), C: Point.fromBytes(fromHex(e.C)), encAmount: fromHex(e.encAmount), viewTag: e.viewTag };
       const got = scanShieldedOutput(scanKeys, Point.fromBytes(fromHex(e.R)), e.j, o);
-      if (!got) continue; // falso positivo da view tag (esperado: ~1 em 256)
+      if (!got) continue; // view tag false positive (expected: ~1 in 256)
       if (got.index >= this.subCount) {
         while (this.subCount <= got.index) (this.data.subaddresses ??= []).push({ label: '', created: Date.now(), recovered: true });
         scanKeys = this.keys.scanKeysFor(this.subCount + LOOKAHEAD);
@@ -380,13 +380,13 @@ export class LightWallet extends Wallet {
     const ownedList = [...owned.values()].sort((a, b) => a.index - b.index);
     this.data.sScanned = Math.min(...totals);
 
-    // 3) o que já foi gasto (por baldes de imagem de chave, em todos os servidores)
+    // 3) what was already spent (by key-image buckets, on all servers)
     if (ownedList.length) {
       const st = await this._keyImageStatus(ownedList.map((o) => o.keyImage), notes);
       st.forEach((x, n) => { ownedList[n].spent = x.spent; ownedList[n].pending = x.inMempool; });
     }
 
-    // 4) provas: só conta no saldo (e só pode ser gasto) o que foi provado
+    // 4) proofs: only what was proven counts in the balance (and can be spent)
     for (const o of ownedList) {
       if (o.spent) continue;
       o.unverified = !(await this._verifyOutput(o.outpoint, (tx, ix) => {

@@ -1,17 +1,17 @@
-// Árvore de curvas (Curve Trees, Campanelli–Hall-Andersen–Kamp 2023) com TODAS as saídas
-// privadas da rede, na ordem global (a mesma numeração usada pelas carteiras).
+// Curve tree (Curve Trees, Campanelli–Hall-Andersen–Kamp 2023) with ALL the network's private
+// outputs, in global order (the same numbering the wallets use).
 //
-//   folha j (ponto de E2):  L_j = P.x·G0 + P.y·G1 + I.x·G2 + I.y·G3 + C.x·G4 + C.y·G5 (+ k·H)
-//        P = chave de uso único, I = Hp(P) (base da imagem de chave), C = compromisso do valor
-//   nível 1 (E1):  N = Σ x(L_j)·G_j  para até `branch` folhas
-//   nível 2 (E2):  N = Σ x(filho)·G_j  … e assim por diante, alternando de curva, até a raiz.
+//   leaf j (point of E2):  L_j = P.x·G0 + P.y·G1 + I.x·G2 + I.y·G3 + C.x·G4 + C.y·G5 (+ k·H)
+//        P = one-time key, I = Hp(P) (key image base), C = amount commitment
+//   level 1 (E1):  N = Σ x(L_j)·G_j  for up to `branch` leaves
+//   level 2 (E2):  N = Σ x(child)·G_j  … and so on, alternating curves, up to the root.
 //
-// "Permissível": cada nó usado como filho é deslocado por k·H (k mínimo) até que y + 1 seja
-// quadrado e 1 − y não seja — assim a coordenada x identifica o ponto sem ambiguidade
-// (só um de ±P passa no teste), e o circuito só precisa provar "y + 1 é quadrado".
+// "Permissible": each node used as a child is shifted by k·H (minimal k) until y + 1 is a
+// square and 1 − y is not — so the x coordinate identifies the point unambiguously
+// (only one of ±P passes the test), and the circuit only needs to prove "y + 1 is a square".
 //
-// A árvore é uma VISÃO sobre a lista de saídas privadas do estado UTXO: folhas e nós são
-// calculados sob demanda e memorizados (nós completos nunca mudam; reorganizações truncam).
+// The tree is a VIEW over the UTXO state's list of private outputs: leaves and nodes are
+// computed on demand and memoized (complete nodes never change; reorganizations truncate).
 
 import { E1, E2 } from './curve.js';
 import { bpGens } from './bp.js';
@@ -20,9 +20,9 @@ import { hashPointForKeyImage } from '../crypto/clsag.js';
 import { Point } from '../crypto/secp256k1.js';
 
 export const LEAF_WIDTH = 6;
-export const LEAF_BLIND = 6; // posição (em G de E2) do cegamento da folha
+export const LEAF_BLIND = 6; // position (in E2's G) of the leaf blinding
 
-/** Curva, posição dos filhos e do cegamento dos nós do nível l (1 = logo acima das folhas). */
+/** Curve, position of the children and of the node blinding at level l (1 = right above the leaves). */
 export function segment(l, branch) {
   if (l % 2 === 1) { const o = ((l - 1) / 2) * (branch + 1); return { curve: E1, off: o, blind: o + branch }; }
   const o = LEAF_BLIND + 1 + ((l - 2) / 2) * (branch + 1);
@@ -30,7 +30,7 @@ export function segment(l, branch) {
 }
 
 export function depthFor(N, branch) {
-  if (N < 1) throw new Error('árvore vazia');
+  if (N < 1) throw new Error('empty tree');
   let d = 1, cap = branch;
   while (cap < N) { d++; cap *= branch; }
   return d;
@@ -42,17 +42,17 @@ export function isPermissible(curve, pt) {
   const F = curve.F;
   return F.isSquare(F.add(a[1], 1n)) && !F.isSquare(F.sub(1n, a[1]));
 }
-/** Menor k ≥ 0 com raw + k·H permissível. */
+/** Smallest k ≥ 0 with raw + k·H permissible. */
 export function makePermissible(curve, raw, h) {
   let pt = raw;
   for (let k = 0; k < 4096; k++) {
     if (isPermissible(curve, pt)) return { k: BigInt(k), point: pt };
     pt = pt.add(h);
   }
-  throw new Error('nenhum deslocamento permissível');
+  throw new Error('no permissible offset');
 }
 
-// ------------------------------------------------------------------ folhas
+// ------------------------------------------------------------------ leaves
 let leafTables = null;
 function tables() {
   if (!leafTables) {
@@ -62,7 +62,7 @@ function tables() {
   return leafTables;
 }
 
-/** Dados da folha de uma saída (P, C: pontos secp256k1 ou 33 bytes). */
+/** Leaf data of an output (P, C: secp256k1 points or 33 bytes). */
 export function leafData(P, C) {
   if (!(P instanceof Point)) P = Point.fromBytes(P);
   if (!(C instanceof Point)) C = Point.fromBytes(C);
@@ -76,7 +76,7 @@ export function leafData(P, C) {
   return { P, I, C, coords, raw, k, point, x: point.x };
 }
 
-const leafMemo = new Map(); // chave do outpoint → x(L') (dados imutáveis: o txid compromete a saída)
+const leafMemo = new Map(); // outpoint key → x(L') (immutable data: the txid commits to the output)
 function leafX(key, P, C) {
   let x = leafMemo.get(key);
   if (x === undefined) {
@@ -87,20 +87,20 @@ function leafX(key, P, C) {
   return x;
 }
 
-// ------------------------------------------------------------------ árvore
+// ------------------------------------------------------------------ tree
 export class CurveTree {
-  /** getLeaf(i) → { key, P, C } (bytes) da i-ésima saída privada da ordem global. */
+  /** getLeaf(i) → { key, P, C } (bytes) of the i-th private output in global order. */
   constructor(branch, getLeaf) {
     this.branch = branch;
     this.getLeaf = getLeaf;
-    this.cache = new Map();      // nós completos: "nível:índice" → registro
-    this.maxIdx = new Map();     // nível → maior índice memorizado (para truncar rápido)
-    this.roots = new Map();      // N → raiz
+    this.cache = new Map();      // complete nodes: "level:index" → record
+    this.maxIdx = new Map();     // level → highest memoized index (to truncate quickly)
+    this.roots = new Map();      // N → root
   }
 
   leafX(i) { const l = this.getLeaf(i); return leafX(l.key, l.P, l.C); }
 
-  /** Nó (nível, índice) considerando só as folhas < N. null se não existir. */
+  /** Node (level, index) considering only the leaves < N. null if it does not exist. */
   nodeAt(level, idx, N) {
     const b = this.branch, span = b ** level, start = idx * span;
     if (start >= N) return null;
@@ -122,7 +122,7 @@ export class CurveTree {
     return rec;
   }
 
-  /** Raiz da árvore com as N primeiras saídas: { depth, point (nó cru), count (filhos) }. */
+  /** Root of the tree with the first N outputs: { depth, point (raw node), count (children) }. */
   root(N) {
     let r = this.roots.get(N);
     if (!r) {
@@ -135,22 +135,22 @@ export class CurveTree {
   }
 
   /**
-   * Caminho do "pedaço" (nó de nível 1) número `chunk`: as entradas de cada nó do caminho,
-   * do nível 1 até a raiz. É tudo o que quem prova precisa da rede.
+   * Path of "chunk" (level-1 node) number `chunk`: the entries of each node on the path,
+   * from level 1 up to the root. It is all the prover needs from the network.
    */
   pathForChunk(N, chunk) {
     const d = depthFor(N, this.branch), out = [];
     let idx = chunk;
     for (let l = 1; l <= d; l++) {
       const rec = this.nodeAt(l, idx, N);
-      if (!rec) throw new Error('pedaço fora da árvore');
+      if (!rec) throw new Error('chunk outside the tree');
       out.push({ level: l, idx, entries: rec.entries });
       idx = Math.floor(idx / this.branch);
     }
     return out;
   }
 
-  /** Reorganização: as saídas a partir de n mudaram — esquece o que dependia delas. */
+  /** Reorganization: the outputs from n on changed — forget whatever depended on them. */
   truncate(n) {
     const b = this.branch;
     for (const [l, max] of this.maxIdx) {

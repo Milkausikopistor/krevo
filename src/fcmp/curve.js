@@ -1,14 +1,14 @@
-// Ciclo de curvas secp256k1 / secq256k1 — a base da árvore de curvas (Curve Trees).
+// The secp256k1 / secq256k1 curve cycle — the foundation of the curve tree (Curve Trees).
 //
-//   E1 = secp256k1:  y² = x³ + 7 sobre F_p, ordem n   (a curva de sempre do Krevo)
-//   E2 = secq256k1:  y² = x³ + 7 sobre F_n, ordem p   (a "gêmea": campo e ordem trocados)
+//   E1 = secp256k1:  y² = x³ + 7 over F_p, order n   (Krevo's usual curve)
+//   E2 = secq256k1:  y² = x³ + 7 over F_n, order p   (the "twin": field and order swapped)
 //
-// Como o campo de uma é a ordem da outra, a coordenada x de um ponto de E1 é um escalar
-// de E2 e vice-versa. Isso permite provar, DENTRO de uma prova sobre E2, operações com
-// pontos de E1 (e vice-versa) — cada nível da árvore alterna de curva.
+// Since one curve's field is the other's order, the x coordinate of a point of E1 is a scalar
+// of E2 and vice versa. This allows proving, INSIDE a proof over E2, operations with
+// points of E1 (and vice versa) — each tree level alternates curves.
 //
-// Implementação genérica em JavaScript puro (BigInt, coordenadas Jacobianas). Não é de
-// tempo constante: segredos passam por aqui só na hora de provar, na máquina do dono.
+// Generic pure-JavaScript implementation (BigInt, Jacobian coordinates). Not
+// constant-time: secrets only pass through here when proving, on the owner's machine.
 
 import { randomBytes } from 'node:crypto';
 import { H, H64 } from '../crypto/hash.js';
@@ -17,16 +17,16 @@ import { bigToBytesBE, bytesToBigBE, u32le } from '../util/bytes.js';
 export const P = 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2fn;
 export const N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 
-// --------------------------------------------------------------------- campos
+// --------------------------------------------------------------------- fields
 export class Field {
   constructor(m) {
     this.m = m;
     const MASK = (1n << 256n) - 1n, FOLD = (1n << 256n) % m;
-    // redução rápida para módulos 2^256 − c com c pequeno (p de secp256k1); genérica (%) para os outros
+    // fast reduction for moduli 2^256 − c with small c (secp256k1's p); generic (%) for the others
     this.red = FOLD < (1n << 40n)
       ? (x) => { let h = x >> 256n; x = (x & MASK) + h * FOLD; h = x >> 256n; x = (x & MASK) + h * FOLD; return x >= m ? x - m : x; }
       : (x) => x % m;
-    // raiz quadrada: m ≡ 3 (mod 4) → expoente direto; senão Tonelli–Shanks
+    // square root: m ≡ 3 (mod 4) → direct exponent; otherwise Tonelli–Shanks
     if (m % 4n === 3n) this.sqrtExp = (m + 1n) / 4n;
     else {
       let q = m - 1n, s = 0n;
@@ -50,7 +50,7 @@ export class Field {
   inv(a) {
     const m = this.m;
     a = this.norm(a);
-    if (a === 0n) throw new Error('inverso de zero');
+    if (a === 0n) throw new Error('inverse of zero');
     let r0 = a, r1 = m, s0 = 1n, s1 = 0n;
     while (r1 !== 0n) {
       const q = r0 / r1;
@@ -59,7 +59,7 @@ export class Field {
     }
     s0 %= m; return s0 < 0n ? s0 + m : s0;
   }
-  /** Critério de quadrado via símbolo de Jacobi (bem mais rápido que a exponenciação). */
+  /** Squareness test via the Jacobi symbol (much faster than exponentiation). */
   isSquare(a) {
     a = this.norm(a);
     if (a === 0n) return true;
@@ -72,7 +72,7 @@ export class Field {
     }
     return n === 1n && t === 1;
   }
-  /** Raiz quadrada (a menor das duas não é garantida) ou null se não existir. */
+  /** Square root (which of the two is not guaranteed) or null if none exists. */
   sqrt(a) {
     a = this.norm(a);
     if (a === 0n) return 0n;
@@ -92,13 +92,13 @@ export class Field {
   random() {
     for (;;) { const s = bytesToBigBE(randomBytes(64)) % this.m; if (s !== 0n) return s; }
   }
-  /** Hash → elemento (64 bytes de hash: viés desprezível). */
+  /** Hash → element (64 bytes of hash: negligible bias). */
   hash(domain, ...parts) { return bytesToBigBE(H64(domain, ...parts)) % this.m; }
   toBytes(a) { return bigToBytesBE(this.norm(a), 32); }
   fromBytes(b) {
-    if (b.length !== 32) throw new Error('elemento deve ter 32 bytes');
+    if (b.length !== 32) throw new Error('an element must have 32 bytes');
     const a = bytesToBigBE(b);
-    if (a >= this.m) throw new Error('elemento não canônico');
+    if (a >= this.m) throw new Error('non-canonical element');
     return a;
   }
 }
@@ -106,11 +106,11 @@ export class Field {
 export const Fp = new Field(P);
 export const Fn = new Field(N);
 
-// --------------------------------------------------------------------- curvas
+// --------------------------------------------------------------------- curves
 const JINF = Object.freeze([0n, 1n, 0n]);
 
 export class Curve {
-  /** y² = x³ + 7 sobre `field`, com `order` pontos (sem cofator). */
+  /** y² = x³ + 7 over `field`, with `order` points (no cofactor). */
   constructor(name, field, scalar) {
     this.name = name; this.F = field; this.S = scalar; this.order = scalar.m;
     const F = field, m = F.m, red = F.red;
@@ -162,15 +162,15 @@ export class Curve {
 
   onCurve(x, y) { const F = this.F; return F.sqr(y) === F.add(F.mul(F.sqr(x), x), 7n); }
   point(x, y) {
-    if (!this.onCurve(x, y)) throw new Error(`${this.name}: ponto fora da curva`);
+    if (!this.onCurve(x, y)) throw new Error(`${this.name}: point not on the curve`);
     return new CPoint(this, [x, y, 1n]);
   }
-  /** Ponto com essa coordenada x e y "par" (ou null se x não estiver na curva). */
+  /** Point with this x coordinate and "even" y (or null if x is not on the curve). */
   liftX(x, odd = false) {
     const F = this.F;
     if (x >= F.m) return null;
     const rhs = F.add(F.mul(F.sqr(x), x), 7n);
-    if (!F.isSquare(rhs)) return null; // Jacobi: bem mais barato que tentar a raiz
+    if (!F.isSquare(rhs)) return null; // Jacobi: much cheaper than trying the root
     let y = F.sqrt(rhs);
     if (y === null) return null;
     if ((y & 1n) !== (odd ? 1n : 0n)) y = F.neg(y);
@@ -178,21 +178,21 @@ export class Curve {
   }
   fromBytes(b) {
     b = Buffer.from(b);
-    if (b.length !== 33 || (b[0] !== 2 && b[0] !== 3)) throw new Error(`${this.name}: ponto inválido`);
+    if (b.length !== 33 || (b[0] !== 2 && b[0] !== 3)) throw new Error(`${this.name}: invalid point`);
     const p = this.liftX(bytesToBigBE(b.subarray(1)), b[0] === 3);
-    if (!p) throw new Error(`${this.name}: ponto fora da curva`);
+    if (!p) throw new Error(`${this.name}: point not on the curve`);
     return p;
   }
-  /** Ponto "nada na manga": ninguém conhece seu logaritmo discreto. */
+  /** "Nothing up my sleeve" point: nobody knows its discrete logarithm. */
   hashToPoint(domain, ...parts) {
     for (let ctr = 0; ctr < 1000; ctr++) {
       const x = bytesToBigBE(H(domain, this.name, ...parts, u32le(ctr)));
       const p = this.liftX(x);
       if (p) return p;
     }
-    throw new Error('hashToPoint falhou');
+    throw new Error('hashToPoint failed');
   }
-  /** Gerador nomeado (memorizado). */
+  /** Named generator (memoized). */
   gen(label) {
     let g = this._gens.get(label);
     if (!g) { g = this.hashToPoint('fcmp/gen', label); g.affine(); this._gens.set(label, g); }
@@ -231,9 +231,9 @@ export class Curve {
     return acc;
   }
 
-  /** Σ ks[i]·ps[i] (CPoint[]). Straus para poucos termos, Pippenger para muitos. */
+  /** Σ ks[i]·ps[i] (CPoint[]). Straus for few terms, Pippenger for many. */
   msm(ks, ps) { return new CPoint(this, this.msmJ(ks, ps.map((p) => p.j))); }
-  /** Igual a msm, com pontos em coordenadas Jacobianas cruas ([X, Y, Z]). */
+  /** Same as msm, with points in raw Jacobian coordinates ([X, Y, Z]). */
   msmJ(ks, js) {
     if (ks.length !== js.length) throw new Error('msm: tamanhos diferentes');
     const r = this.order, k2 = [], j2 = [];
@@ -269,17 +269,17 @@ export class Curve {
     const c = n < 64 ? 4 : n < 256 ? 6 : n < 1024 ? 7 : n < 8192 ? 8 : 10;
     const windows = Math.ceil(256 / c);
     const aff = this.batchAffine(js);
-    // dígitos de c bits de cada escalar (do menos significativo ao mais)
+    // c-bit digits of each scalar (from least to most significant)
     const digits = new Array(n);
     const mask = (1 << c) - 1;
     for (let i = 0; i < n; i++) {
       const d = new Int32Array(windows);
-      // 64 bits de cada vez (BigInt → Number em blocos de 32)
+      // 64 bits at a time (BigInt → Number in 32-bit blocks)
       let k = ks[i], bitPos = 0, buf = 0, bufBits = 0, w = 0;
       while (w < windows) {
         if (bufBits < c) {
           const chunk = Number(k & 0xffffffffn); k >>= 32n;
-          buf += chunk * 2 ** bufBits; bufBits += 32; // buf < 2^(32+c) — cabe em double
+          buf += chunk * 2 ** bufBits; bufBits += 32; // buf < 2^(32+c) — fits in a double
         }
         d[w++] = buf % (mask + 1); buf = Math.floor(buf / (mask + 1)); bufBits -= c; bitPos += c;
       }
@@ -345,7 +345,7 @@ export class CPoint {
   hex() { return this.toBytes().toString('hex'); }
 }
 
-/** Tabela de base fixa (janelas de 4 bits, 64 linhas × 15 pontos afins). */
+/** Fixed-base table (4-bit windows, 64 rows × 15 affine points). */
 export class FixedBase {
   constructor(point) { this.point = point; this.c = point.c; this.table = null; }
   _build() {

@@ -1,7 +1,7 @@
-// App da carteira Krevo para navegador e celular (PWA). Usa a MESMA carteira leve da linha de
-// comando (src/light/wallet.js): varredura local com view tags, provas de aceitação com PoW,
-// anéis CLSAG, Bulletproofs e memos — tudo rodando aqui, em JavaScript puro.
-// Chaves e frase ficam neste aparelho, cifradas com a sua senha (src/web/browser-wallet.js).
+// Krevo wallet app for browsers and phones (PWA). It runs the SAME light wallet as the command
+// line (src/light/wallet.js): local scanning with view tags, acceptance proofs with proof of work,
+// full-chain membership proofs, Bulletproofs and memos — all running here, in the browser.
+// Keys and the recovery phrase stay on this device, encrypted with your password (src/web/browser-wallet.js).
 import './boot.js';
 import { formatKRV, parseKRV } from '../params.js';
 import { LightClient } from '../light/wallet.js';
@@ -19,8 +19,9 @@ const short = (s, a = 10, b = 6) => (s.length > a + b + 1 ? `${s.slice(0, a)}…
 const $ = (sel) => $app.querySelector(sel);
 const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn); return el; };
 
-const S = { w: null, tab: 'inicio', syncing: false, lastSync: 0, syncErr: null, timer: null, flow: null, recvKind: 's', from: 'auto', resolved: null };
-let defaultServer = localStorage.getItem('krevo-servidor') ?? 'http://127.0.0.1:8090';
+const S = { w: null, tab: 'home', syncing: false, lastSync: 0, syncErr: null, timer: null, flow: null, recvKind: 's', from: 'auto', resolved: null };
+const SERVER_KEY = 'krevo-server';
+let defaultServer = localStorage.getItem(SERVER_KEY) ?? localStorage.getItem('krevo-servidor') ?? 'http://127.0.0.1:8090';
 
 const ICONS = {
   home: '<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
@@ -50,7 +51,7 @@ async function busy(btn, label, fn) {
   try { return await fn(); } catch (e) { toast(e.message, true); return undefined; } finally { btn.disabled = false; btn.innerHTML = old; }
 }
 async function copy(text) {
-  try { await navigator.clipboard.writeText(text); toast('Copiado'); } catch { toast('Não deu para copiar automaticamente; selecione o texto.', true); }
+  try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Could not copy automatically; please select the text.', true); }
 }
 function modal(html, setup) {
   const m = document.createElement('div');
@@ -64,35 +65,40 @@ function modal(html, setup) {
   return close;
 }
 
-// ------------------------------------------------------------------ telas sem carteira aberta
+// ------------------------------------------------------------------ screens without an open wallet
 function render() {
   if (!S.w) return S.flow ? renderFlow() : storedWallets().length ? renderUnlock() : renderWelcome();
   return renderMain();
 }
-const brand = '<div class="top"><div class="brand"><img src="/src/web/icon.svg" alt="">Krevo</div><div class="spacer"></div></div>';
+const brand = '<div class="top"><div class="brand"><span class="wordmark">krevo</span></div><div class="spacer"></div></div>';
 
 function renderWelcome() {
   $app.className = 'app bare';
   $app.innerHTML = `${brand}
-    <h1>Sua carteira, no seu aparelho.</h1>
-    <p class="muted">Leve e privada: não precisa de nó próprio, e o servidor que você usar <b>nunca recebe suas chaves</b> — cada pagamento recebido é conferido com prova antes de contar no saldo.</p>
+    <h1>Your wallet, on your device.</h1>
+    <p class="muted">Light and private: no node of your own, and the server you use <b>never gets your keys</b> — every payment you receive is checked against a proof before it counts in your balance.</p>
     <div class="card">
-      <label for="srv">Servidor leve</label>
+      <label for="srv">Light server</label>
       <input id="srv" value="${esc(defaultServer)}" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <p class="hint">Qualquer servidor serve. Ele não consegue gastar, nem ver seu saldo privado.</p>
+      <p class="hint">Any server works. It can neither spend your coins nor see your private balance.</p>
       <div class="stack">
-        <button class="btn primary" id="b-new">Criar carteira nova</button>
-        <button class="btn" id="b-restore">Restaurar com a frase de recuperação</button>
-        ${storedWallets().length ? '<button class="btn" id="b-back">Voltar para as carteiras salvas</button>' : ''}
+        <button class="btn primary" id="b-new">Create a new wallet</button>
+        <button class="btn" id="b-restore">Restore from recovery phrase</button>
+        ${storedWallets().length ? '<button class="btn" id="b-back">Back to saved wallets</button>' : ''}
       </div>
-    </div>`;
-  const server = () => { defaultServer = $('#srv').value.trim().replace(/\/+$/, ''); localStorage.setItem('krevo-servidor', defaultServer); return defaultServer; };
-  on('#b-new', 'click', (e) => busy(e.currentTarget, 'Conferindo o servidor…', async () => {
+    </div>
+    <ul class="features">
+      <li><b>Private by default</b><span>Amounts and recipients stay hidden on the network.</span></li>
+      <li><b>Your keys, your device</b><span>Encrypted here; nothing goes to the server.</span></li>
+      <li><b>Installable</b><span>Works as an app on phones and computers.</span></li>
+    </ul>`;
+  const server = () => { defaultServer = $('#srv').value.trim().replace(/\/+$/, ''); localStorage.setItem(SERVER_KEY, defaultServer); return defaultServer; };
+  on('#b-new', 'click', (e) => busy(e.currentTarget, 'Checking the server…', async () => {
     const info = await new LightClient(server()).info();
     S.flow = { step: 'words', server: defaultServer, network: info.network, words: generateMnemonic(24).split(' ') };
     render();
   }));
-  on('#b-restore', 'click', (e) => busy(e.currentTarget, 'Conferindo o servidor…', async () => {
+  on('#b-restore', 'click', (e) => busy(e.currentTarget, 'Checking the server…', async () => {
     const info = await new LightClient(server()).info();
     S.flow = { step: 'restore', server: defaultServer, network: info.network };
     render();
@@ -103,28 +109,28 @@ function renderWelcome() {
 function renderFlow() {
   const f = S.flow;
   $app.className = 'app bare';
-  const back = '<button class="btn" id="f-back">Voltar</button>';
+  const back = '<button class="btn" id="f-back">Back</button>';
   if (f.step === 'words') {
-    $app.innerHTML = `${brand}<h1>Frase de recuperação</h1>
-      <p class="muted">Estas 24 palavras <b>são</b> a sua carteira. Anote em papel, na ordem, e guarde em lugar seguro. Quem tiver a frase controla o dinheiro — nunca tire foto, nunca digite em sites, nunca envie por mensagem.</p>
+    $app.innerHTML = `${brand}<h1>Recovery phrase</h1>
+      <p class="muted">These 24 words <b>are</b> your wallet. Write them on paper, in order, and keep them somewhere safe. Whoever has the phrase controls the money — never take a photo, never type it into websites, never send it in a message.</p>
       <div class="card"><ol class="words blur" id="words">${f.words.map((w) => `<li>${esc(w)}</li>`).join('')}</ol>
-      <div class="stack"><button class="btn" id="show">Mostrar as palavras</button>
-      <button class="btn primary" id="next" disabled>Anotei em papel</button>${back}</div></div>`;
+      <div class="stack"><button class="btn" id="show">Show the words</button>
+      <button class="btn primary" id="next" disabled>I wrote them down</button>${back}</div></div>`;
     on('#show', 'click', (e) => { $('#words').classList.remove('blur'); e.currentTarget.remove(); $('#next').disabled = false; });
     on('#next', 'click', () => { f.step = 'confirm'; f.ask = pick3(); render(); });
   } else if (f.step === 'confirm') {
-    $app.innerHTML = `${brand}<h1>Confira a frase</h1><p class="muted">Digite estas palavras da sua anotação:</p>
-      <div class="card">${f.ask.map((i) => `<label for="c${i}">Palavra nº ${i + 1}</label><input id="c${i}" autocomplete="off" autocapitalize="off" spellcheck="false">`).join('')}
-      <div class="stack"><button class="btn primary" id="next">Continuar</button>${back}</div></div>`;
+    $app.innerHTML = `${brand}<h1>Check the phrase</h1><p class="muted">Type these words from your notes:</p>
+      <div class="card">${f.ask.map((i) => `<label for="c${i}">Word #${i + 1}</label><input id="c${i}" autocomplete="off" autocapitalize="off" spellcheck="false">`).join('')}
+      <div class="stack"><button class="btn primary" id="next">Continue</button>${back}</div></div>`;
     on('#next', 'click', () => {
       const ok = f.ask.every((i) => $(`#c${i}`).value.trim().toLowerCase() === f.words[i]);
-      if (!ok) return toast('Alguma palavra não confere. Olhe a anotação de novo.', true);
+      if (!ok) return toast('A word does not match. Check your notes again.', true);
       f.step = 'password'; f.mnemonic = f.words.join(' '); render();
     });
   } else if (f.step === 'restore') {
-    $app.innerHTML = `${brand}<h1>Restaurar</h1><p class="muted">Digite a frase de 12 ou 24 palavras, separadas por espaço.</p>
-      <div class="card"><label for="ph">Frase de recuperação</label><textarea id="ph" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
-      <p class="hint" id="ph-hint"></p><div class="stack"><button class="btn primary" id="next">Continuar</button>${back}</div></div>`;
+    $app.innerHTML = `${brand}<h1>Restore</h1><p class="muted">Type your 12 or 24 word phrase, separated by spaces.</p>
+      <div class="card"><label for="ph">Recovery phrase</label><textarea id="ph" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+      <p class="hint" id="ph-hint"></p><div class="stack"><button class="btn primary" id="next">Continue</button>${back}</div></div>`;
     on('#next', 'click', () => {
       try {
         const m = normalizeMnemonic($('#ph').value);
@@ -133,22 +139,22 @@ function renderFlow() {
       } catch (e) { $('#ph-hint').className = 'hint err'; $('#ph-hint').textContent = e.message; }
     });
   } else if (f.step === 'password') {
-    $app.innerHTML = `${brand}<h1>Senha deste aparelho</h1>
-      <p class="muted">Ela cifra a carteira aqui no navegador. Se esquecer, é só restaurar com a frase.</p>
-      <div class="card"><label for="p1">Senha (mínimo 8 caracteres)</label><input id="p1" type="password" autocomplete="new-password">
-      <label for="p2">Repita a senha</label><input id="p2" type="password" autocomplete="new-password">
-      <p class="hint">Rede: <b>${esc(f.network)}</b> · servidor ${esc(f.server)}</p>
-      <div class="stack"><button class="btn primary" id="go">Criar carteira</button>${back}</div></div>`;
+    $app.innerHTML = `${brand}<h1>Password for this device</h1>
+      <p class="muted">It encrypts the wallet here in the browser. If you forget it, just restore from the phrase.</p>
+      <div class="card"><label for="p1">Password (at least 8 characters)</label><input id="p1" type="password" autocomplete="new-password">
+      <label for="p2">Repeat the password</label><input id="p2" type="password" autocomplete="new-password">
+      <p class="hint">Network: <b>${esc(f.network)}</b> · server ${esc(f.server)}</p>
+      <div class="stack"><button class="btn primary" id="go">Create wallet</button>${back}</div></div>`;
     on('#go', 'click', (e) => {
       const p1 = $('#p1').value, p2 = $('#p2').value;
-      if (p1.length < 8) return toast('A senha precisa de pelo menos 8 caracteres.', true);
-      if (p1 !== p2) return toast('As senhas não conferem.', true);
-      return busy(e.currentTarget, 'Cifrando e criando…', async () => {
+      if (p1.length < 8) return toast('The password needs at least 8 characters.', true);
+      if (p1 !== p2) return toast('The passwords do not match.', true);
+      return busy(e.currentTarget, 'Encrypting and creating…', async () => {
         S.w = await createWallet({ server: f.server, password: p1, mnemonic: f.mnemonic });
-        S.flow = null; S.tab = 'inicio';
+        S.flow = null; S.tab = 'home';
         startSync();
         render();
-        toast('Carteira criada');
+        toast('Wallet created');
       });
     });
   }
@@ -163,17 +169,17 @@ function pick3() {
 function renderUnlock() {
   const list = storedWallets();
   $app.className = 'app bare';
-  $app.innerHTML = `${brand}<h1>Bem-vindo de volta</h1>
+  $app.innerHTML = `${brand}<h1>Welcome back</h1>
     <div class="card">
-      ${list.length > 1 ? `<label for="net">Carteira</label><select id="net">${list.map((x) => `<option value="${esc(x.network)}">${esc(x.network)} · ${esc(x.server)}</option>`).join('')}</select>`
-    : `<p class="muted small">Rede <b>${esc(list[0].network)}</b> · ${esc(list[0].server)}</p>`}
-      <label for="pw">Senha</label><input id="pw" type="password" autocomplete="current-password">
-      <div class="stack"><button class="btn primary" id="go">Abrir</button><button class="btn" id="other">Criar ou restaurar outra</button></div>
+      ${list.length > 1 ? `<label for="net">Wallet</label><select id="net">${list.map((x) => `<option value="${esc(x.network)}">${esc(x.network)} · ${esc(x.server)}</option>`).join('')}</select>`
+    : `<p class="muted small">Network <b>${esc(list[0].network)}</b> · ${esc(list[0].server)}</p>`}
+      <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password">
+      <div class="stack"><button class="btn primary" id="go">Open</button><button class="btn" id="other">Create or restore another</button></div>
     </div>`;
-  const go = (btn) => busy(btn, 'Abrindo…', async () => {
+  const go = (btn) => busy(btn, 'Opening…', async () => {
     const net = $('#net')?.value ?? list[0].network;
     S.w = await unlockWallet(net, $('#pw').value);
-    S.tab = 'inicio';
+    S.tab = 'home';
     startSync();
     render();
   });
@@ -183,7 +189,7 @@ function renderUnlock() {
   $('#pw').focus();
 }
 
-// ------------------------------------------------------------------ sincronização
+// ------------------------------------------------------------------ syncing
 function startSync() {
   clearInterval(S.timer);
   S.timer = setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 20_000);
@@ -202,35 +208,36 @@ async function syncNow() {
   } finally {
     S.syncing = false;
     paintStatus();
-    if (S.w && S.tab === 'inicio') paintHome();
+    if (S.w && S.tab === 'home') paintHome();
   }
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
 
 function statusChip() {
-  if (S.syncing) return '<span class="chip"><span class="spin"></span>sincronizando</span>';
-  if (S.syncErr) return `<span class="chip bad" title="${esc(S.syncErr)}"><span class="dot"></span>sem conexão</span>`;
-  if (S.lastSync) return '<span class="chip good"><span class="dot"></span>atualizado</span>';
+  // on narrow screens only the indicator shows; the text stays for screen readers (class lbl)
+  if (S.syncing) return '<span class="chip status" title="syncing"><span class="spin"></span><span class="lbl">syncing</span></span>';
+  if (S.syncErr) return `<span class="chip status bad" title="offline: ${esc(S.syncErr)}"><span class="dot"></span><span class="lbl">offline</span></span>`;
+  if (S.lastSync) return '<span class="chip status good" title="up to date"><span class="dot"></span><span class="lbl">up to date</span></span>';
   return '<span class="chip">—</span>';
 }
 function paintStatus() { const el = document.getElementById('status'); if (el) el.innerHTML = statusChip(); }
 
-// ------------------------------------------------------------------ carteira aberta
+// ------------------------------------------------------------------ open wallet
 function renderMain() {
   $app.className = 'app';
-  $app.innerHTML = `<div class="top"><div class="brand"><img src="/src/web/icon.svg" alt="">Krevo</div>
-      <span class="chip">${esc(S.w.network)}</span><div class="spacer"></div><span id="status">${statusChip()}</span>
-      <button class="iconbtn" id="refresh" aria-label="Atualizar">${icon('refresh')}</button>
-      <button class="iconbtn" id="lock" aria-label="Bloquear">${icon('lock')}</button></div>
+  $app.innerHTML = `<div class="top"><div class="brand"><span class="wordmark">krevo</span></div>
+      <span class="chip net">${esc(S.w.network)}</span><div class="spacer"></div><span id="status">${statusChip()}</span>
+      <button class="iconbtn" id="refresh" aria-label="Refresh">${icon('refresh')}</button>
+      <button class="iconbtn" id="lock" aria-label="Lock">${icon('lock')}</button></div>
     <div id="view"></div>
-    <nav class="nav" aria-label="Seções"><div class="inner">
-      ${[['inicio', 'home', 'Início'], ['receber', 'recv', 'Receber'], ['enviar', 'send', 'Enviar'], ['ajustes', 'gear', 'Ajustes']]
+    <nav class="nav" aria-label="Sections"><div class="inner">
+      ${[['home', 'home', 'Home'], ['receive', 'recv', 'Receive'], ['send', 'send', 'Send'], ['settings', 'gear', 'Settings']]
     .map(([t, i, l]) => `<button data-tab="${t}" ${S.tab === t ? 'aria-current="page"' : ''}>${icon(i)}${l}</button>`).join('')}
     </div></nav>`;
   $app.querySelectorAll('.nav button').forEach((b) => b.addEventListener('click', () => { S.tab = b.dataset.tab; renderMain(); }));
   on('#refresh', 'click', () => syncNow());
   on('#lock', 'click', () => { clearInterval(S.timer); S.w = null; S.lastSync = 0; render(); });
-  ({ inicio: paintHome, receber: paintReceive, enviar: paintSend, ajustes: paintSettings })[S.tab]();
+  ({ home: paintHome, receive: paintReceive, send: paintSend, settings: paintSettings })[S.tab]();
 }
 
 function paintHome() {
@@ -241,29 +248,29 @@ function paintHome() {
   const maturing = b.shieldedImmature + b.transparentImmature + b.shieldedPending + b.transparentPending;
   const fraud = Object.entries(w.fraudReports);
   const h = w.history();
-  const mine = new Set(h.sent.map((s) => s.txid)); // saídas das minhas próprias transações = troco
+  const mine = new Set(h.sent.map((s) => s.txid)); // outputs of my own transactions = change
   const received = [...h.received].reverse().map((r) => (mine.has(r.txid)
-    ? `<div class="tx"><div class="ico">${icon('refresh')}</div><div class="main"><b>Troco</b><span>volta do seu envio${r.spent ? ' · já gasto' : ''}</span></div>
+    ? `<div class="tx"><div class="ico">${icon('refresh')}</div><div class="main"><b>Change</b><span>back from your payment${r.spent ? ' · spent' : ''}</span></div>
       <div class="amt">${esc(num(r.amount))}</div></div>`
     : `<div class="tx"><div class="ico">${icon('inArrow')}</div>
-      <div class="main"><b>Recebido${r.coinbase ? ' (mineração)' : ''}</b><span>${r.memo ? `“${esc(r.memo)}”` : esc(r.subLabel)}${r.spent ? ' · já gasto' : ''}</span></div>
+      <div class="main"><b>Received${r.coinbase ? ' (mining)' : ''}</b><span>${r.memo ? `“${esc(r.memo)}”` : esc(r.subLabel)}${r.spent ? ' · spent' : ''}</span></div>
       <div class="amt in">+${esc(num(r.amount))}</div></div>`));
   const sent = h.sent.map((s) => `<div class="tx"><div class="ico">${icon('outArrow')}</div>
-      <div class="main"><b>Enviado${s.name ? ` para @${esc(s.name)}` : ''}</b><span>${esc(new Date(s.time).toLocaleString('pt-BR'))} · ${esc(short(s.to, 12, 6))}${s.memo ? ` · “${esc(s.memo)}”` : ''}</span></div>
+      <div class="main"><b>Sent${s.name ? ` to @${esc(s.name)}` : ''}</b><span>${esc(new Date(s.time).toLocaleString('en-US'))} · ${esc(short(s.to, 12, 6))}${s.memo ? ` · “${esc(s.memo)}”` : ''}</span></div>
       <div class="amt">−${esc(num(s.amount))}</div></div>`);
-  view.innerHTML = `<div class="card">
-      <div class="balance-label">Saldo disponível</div>
+  view.innerHTML = `<div class="card hero">
+      <div class="balance-label">Available balance</div>
       <div class="balance">${esc(num(avail))}<small>KRV</small></div>
-      <div class="split"><div class="stat"><b>${esc(num(b.shielded))}</b><span>privado</span></div><div class="stat"><b>${esc(num(b.transparent))}</b><span>transparente</span></div></div>
-      ${maturing > 0n ? `<div class="notice">Chegando: ${esc(formatKRV(maturing))} (aguardando confirmações)</div>` : ''}
-      ${b.unverified > 0n ? `<div class="notice warn">Aguardando prova: ${esc(formatKRV(b.unverified))}. O servidor informou; a carteira só conta depois de conferir a prova (alguns segundos).</div>` : ''}
-      ${fraud.map(([txid, why]) => `<div class="notice bad">O servidor enviou dados FALSOS sobre ${esc(short(txid, 10, 6))}: ${esc(why)}. Esse valor foi ignorado — considere trocar de servidor.</div>`).join('')}
-      ${w.discrepancies.map((d) => `<div class="notice warn">Servidores divergem: ${esc(d)}</div>`).join('')}
-      ${w.serverUrls.length > 1 && !w.discrepancies.length && S.lastSync ? '<p class="hint ok">2 servidores comparados: concordam.</p>' : ''}
+      <div class="split"><div class="stat"><b>${esc(num(b.shielded))}</b><span>private</span></div><div class="stat"><b>${esc(num(b.transparent))}</b><span>transparent</span></div></div>
+      ${maturing > 0n ? `<div class="notice">Incoming: ${esc(formatKRV(maturing))} (waiting for confirmations)</div>` : ''}
+      ${b.unverified > 0n ? `<div class="notice warn">Waiting for proof: ${esc(formatKRV(b.unverified))}. The server reported it; the wallet only counts it after checking the proof (a few seconds).</div>` : ''}
+      ${fraud.map(([txid, why]) => `<div class="notice bad">The server sent FALSE data about ${esc(short(txid, 10, 6))}: ${esc(why)}. That amount was ignored — consider switching servers.</div>`).join('')}
+      ${w.discrepancies.map((d) => `<div class="notice warn">Servers disagree: ${esc(d)}</div>`).join('')}
+      ${w.serverUrls.length > 1 && !w.discrepancies.length && S.lastSync ? '<p class="hint ok">2 servers compared: they agree.</p>' : ''}
     </div>
-    <div class="row"><button class="btn primary" data-go="enviar">${icon('send')}Enviar</button><button class="btn" data-go="receber">${icon('recv')}Receber</button></div>
-    <h2>Atividade</h2>
-    <div class="card">${[...received, ...sent].join('') || '<div class="empty">Nada por aqui ainda. Toque em Receber para ver seu endereço.</div>'}</div>`;
+    <div class="row"><button class="btn primary" data-go="send">${icon('send')}Send</button><button class="btn" data-go="receive">${icon('recv')}Receive</button></div>
+    <h2>Activity</h2>
+    <div class="card">${[...received, ...sent].join('') || '<div class="empty">Nothing here yet. Tap Receive to see your address.</div>'}</div>`;
   view.querySelectorAll('[data-go]').forEach((el) => el.addEventListener('click', () => { S.tab = el.dataset.go; renderMain(); }));
 }
 
@@ -272,15 +279,15 @@ function paintReceive() {
   const view = document.getElementById('view');
   const addr = S.recvKind === 's' ? w.sAddress : w.tAddress;
   view.innerHTML = `<div class="card">
-      <div class="seg" role="group" aria-label="Tipo de endereço">
-        <button data-k="s" aria-pressed="${S.recvKind === 's'}">Privado</button><button data-k="t" aria-pressed="${S.recvKind === 't'}">Transparente</button></div>
+      <div class="seg" role="group" aria-label="Address type">
+        <button data-k="s" aria-pressed="${S.recvKind === 's'}">Private</button><button data-k="t" aria-pressed="${S.recvKind === 't'}">Transparent</button></div>
       <div class="qr" id="qr"></div>
       <div class="addr mono" id="addr">${esc(addr)}</div>
-      <div class="row mt"><button class="btn" id="copy">Copiar</button>${navigator.share ? '<button class="btn" id="share">Compartilhar</button>' : ''}</div>
-      <label for="ramt">Pedir um valor (opcional)</label><input id="ramt" inputmode="decimal" placeholder="0,00" autocomplete="off">
+      <div class="row mt"><button class="btn" id="copy">Copy</button>${navigator.share ? '<button class="btn" id="share">Share</button>' : ''}</div>
+      <label for="ramt">Request an amount (optional)</label><input id="ramt" inputmode="decimal" placeholder="0.00" autocomplete="off">
       <p class="hint">${S.recvKind === 's'
-    ? 'Privado: o valor e quem recebe ficam ocultos na rede. Cada pagamento vai para um endereço de uso único.'
-    : 'Transparente: valores visíveis na rede, como no Bitcoin. Prefira o privado.'}</p></div>`;
+    ? 'Private: the amount and the recipient stay hidden on the network. Each payment goes to a one-time address.'
+    : 'Transparent: amounts are visible on the network, as in Bitcoin. Prefer private.'}</p></div>`;
   let current = addr;
   const paint = () => {
     let uri = addr;
@@ -294,7 +301,7 @@ function paintReceive() {
   view.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => { S.recvKind = b.dataset.k; paintReceive(); }));
   on('#ramt', 'input', paint);
   on('#copy', 'click', () => copy(current));
-  on('#share', 'click', () => navigator.share({ title: 'Meu endereço Krevo', text: current }).catch(() => {}));
+  on('#share', 'click', () => navigator.share({ title: 'My Krevo address', text: current }).catch(() => {}));
 }
 
 function paintSend() {
@@ -302,21 +309,21 @@ function paintSend() {
   const view = document.getElementById('view');
   const canScan = 'BarcodeDetector' in window && !!navigator.mediaDevices?.getUserMedia;
   view.innerHTML = `<div class="card">
-      <label for="to">Para</label>
-      <div class="row"><input id="to" placeholder="krs1…, krv1… ou @nome" autocomplete="off" autocapitalize="off" spellcheck="false">
-      ${canScan ? `<button class="iconbtn" id="scan" aria-label="Ler QR code">${icon('cam')}</button>` : ''}</div>
-      <p class="hint" id="to-hint">Cole um endereço, um link krevo: ou um @nome.</p>
-      <label for="amt">Valor (KRV)</label><input id="amt" inputmode="decimal" placeholder="0,00" autocomplete="off">
-      <label for="memo">Mensagem (opcional)</label><input id="memo" maxlength="120" autocomplete="off" placeholder="só para endereço privado — cifrada">
-      <label>Pagar com</label>
-      <div class="seg" role="group" aria-label="Origem">${[['auto', 'Automático'], ['privado', 'Privado'], ['transparente', 'Transparente']]
+      <label for="to">To</label>
+      <div class="row"><input id="to" placeholder="krs1…, krv1… or @name" autocomplete="off" autocapitalize="off" spellcheck="false">
+      ${canScan ? `<button class="iconbtn" id="scan" aria-label="Scan QR code">${icon('cam')}</button>` : ''}</div>
+      <p class="hint" id="to-hint">Paste an address, a krevo: link or an @name.</p>
+      <label for="amt">Amount (KRV)</label><input id="amt" inputmode="decimal" placeholder="0.00" autocomplete="off">
+      <label for="memo">Message (optional)</label><input id="memo" maxlength="120" autocomplete="off" placeholder="private addresses only — encrypted">
+      <label>Pay from</label>
+      <div class="seg" role="group" aria-label="Source">${[['auto', 'Automatic'], ['private', 'Private'], ['transparent', 'Transparent']]
     .map(([k, l]) => `<button data-from="${k}" aria-pressed="${S.from === k}">${l}</button>`).join('')}</div>
-      <div class="stack mt"><button class="btn primary" id="review">Revisar</button></div></div>`;
+      <div class="stack mt"><button class="btn primary" id="review">Review</button></div></div>`;
   let seq = 0;
   const check = async () => {
     const raw = $('#to').value.trim(), hint = $('#to-hint'), my = ++seq;
     S.resolved = null;
-    if (!raw) { hint.className = 'hint'; hint.textContent = 'Cole um endereço, um link krevo: ou um @nome.'; return; }
+    if (!raw) { hint.className = 'hint'; hint.textContent = 'Paste an address, a krevo: link or an @name.'; return; }
     if (raw.toLowerCase().startsWith('krevo:')) {
       try {
         const r = parsePaymentURI(w.params, raw);
@@ -327,14 +334,14 @@ function paintSend() {
       } catch (e) { hint.className = 'hint err'; hint.textContent = e.message; return; }
     }
     if (raw.startsWith('@')) {
-      hint.className = 'hint'; hint.textContent = 'Procurando o nome…';
+      hint.className = 'hint'; hint.textContent = 'Looking up the name…';
       try {
         const info = await w.resolveName(raw);
         if (my !== seq) return;
-        if (info.status !== 'ativo') { hint.className = 'hint err'; hint.textContent = info.status === 'livre' ? 'Nome não registrado.' : 'Nome vencido (em carência).'; return; }
+        if (info.status !== 'active') { hint.className = 'hint err'; hint.textContent = info.status === 'free' ? 'Name not registered.' : 'Name expired (in grace period).'; return; }
         S.resolved = { kind: info.targetType, address: info.target, name: info.name };
         hint.className = 'hint ok';
-        hint.textContent = `@${info.name} → ${short(info.target, 14, 8)} (${info.targetType === 's' ? 'privado' : 'transparente'})`;
+        hint.textContent = `@${info.name} → ${short(info.target, 14, 8)} (${info.targetType === 's' ? 'private' : 'transparent'})`;
       } catch (e) { if (my === seq) { hint.className = 'hint err'; hint.textContent = e.message; } }
       return;
     }
@@ -342,7 +349,7 @@ function paintSend() {
       const a = decodeAddress(w.params, raw);
       S.resolved = { kind: a.type, address: raw };
       hint.className = 'hint ok';
-      hint.textContent = { s: 'Endereço privado: valor e destinatário ocultos.', t: 'Endereço transparente: valor visível.', q: 'Endereço quântico (transparente).', m: 'Endereço de multiassinatura (transparente).' }[a.type] ?? 'Endereço válido.';
+      hint.textContent = { s: 'Private address: amount and recipient hidden.', t: 'Transparent address: amount visible.', q: 'Quantum-safe address (transparent).', m: 'Multisig address (transparent).' }[a.type] ?? 'Valid address.';
     } catch (e) { hint.className = 'hint err'; hint.textContent = e.message; }
   };
   let t;
@@ -355,34 +362,34 @@ function paintSend() {
   on('#review', 'click', async () => {
     await check();
     const to = $('#to').value.trim(), memo = $('#memo').value.trim();
-    if (!S.resolved) return toast('Confira o destino.', true);
+    if (!S.resolved) return toast('Check the recipient.', true);
     let amount;
-    try { amount = parseKRV($('#amt').value); if (amount <= 0n) throw new Error(); } catch { return toast('Valor inválido.', true); }
-    if (memo && S.resolved.kind !== 's') return toast('Mensagem só vai cifrada para endereço privado (krs1…).', true);
-    const fromLabel = { auto: 'automático', privado: 'saldo privado', transparente: 'saldo transparente' }[S.from];
-    modal(`<h1>Confirmar envio</h1>
-      <div class="kv"><span>Para</span><span class="mono">${esc(S.resolved.name ? `@${S.resolved.name}` : short(to, 14, 8))}</span></div>
-      ${S.resolved.name ? `<div class="kv"><span>Endereço</span><span class="mono">${esc(short(S.resolved.address, 14, 8))}</span></div>` : ''}
-      <div class="kv"><span>Valor</span><span><b>${esc(formatKRV(amount))}</b></span></div>
-      <div class="kv"><span>Origem</span><span>${esc(fromLabel)}</span></div>
-      ${memo ? `<div class="kv"><span>Mensagem</span><span>${esc(memo)}</span></div>` : ''}
-      <p class="hint">A taxa da rede é uma fração de centavo e é calculada na hora.</p>
-      <div class="stack mt"><button class="btn primary" id="confirm">Enviar agora</button><button class="btn" id="cancel">Cancelar</button></div>`,
+    try { amount = parseKRV($('#amt').value); if (amount <= 0n) throw new Error(); } catch { return toast('Invalid amount.', true); }
+    if (memo && S.resolved.kind !== 's') return toast('Messages are only encrypted to private addresses (krs1…).', true);
+    const fromLabel = { auto: 'automatic', private: 'private balance', transparent: 'transparent balance' }[S.from];
+    modal(`<h1>Confirm payment</h1>
+      <div class="kv"><span>To</span><span class="mono">${esc(S.resolved.name ? `@${S.resolved.name}` : short(to, 14, 8))}</span></div>
+      ${S.resolved.name ? `<div class="kv"><span>Address</span><span class="mono">${esc(short(S.resolved.address, 14, 8))}</span></div>` : ''}
+      <div class="kv"><span>Amount</span><span><b>${esc(formatKRV(amount))}</b></span></div>
+      <div class="kv"><span>From</span><span>${esc(fromLabel)}</span></div>
+      ${memo ? `<div class="kv"><span>Message</span><span>${esc(memo)}</span></div>` : ''}
+      <p class="hint">The network fee is a fraction of a cent and is calculated when sending.</p>
+      <div class="stack mt"><button class="btn primary" id="confirm">Send now</button><button class="btn" id="cancel">Cancel</button></div>`,
     (m, close) => {
       m.querySelector('#cancel').addEventListener('click', close);
-      m.querySelector('#confirm').addEventListener('click', (e) => busy(e.currentTarget, S.from === 'transparente' ? 'Montando e assinando…' : 'Provando e assinando… (um gasto privado prova pertencer a TODAS as saídas da rede: leva alguns segundos)', async () => {
+      m.querySelector('#confirm').addEventListener('click', (e) => busy(e.currentTarget, S.from === 'transparent' ? 'Building and signing…' : 'Proving and signing… (a private spend proves it belongs to ALL outputs of the network: it takes a few seconds)', async () => {
         const t0 = Date.now();
         const r = await w.send({ to, amount, from: S.from, memo: memo || undefined });
         close();
-        const done = modal(`<h1>Enviado</h1><div class="kv"><span>Taxa</span><span>${esc(formatKRV(r.fee))}</span></div>
-          <div class="kv"><span>Transação</span><span class="mono">${esc(short(r.txid, 12, 8))}</span></div>
-          <p id="conf" class="hint"><span class="spin"></span> aguardando a rede…</p><div class="stack"><button class="btn primary" id="ok">Pronto</button></div>`,
-        (m2, close2) => m2.querySelector('#ok').addEventListener('click', () => { close2(); S.tab = 'inicio'; renderMain(); }));
+        const done = modal(`<h1>Sent</h1><div class="kv"><span>Fee</span><span>${esc(formatKRV(r.fee))}</span></div>
+          <div class="kv"><span>Transaction</span><span class="mono">${esc(short(r.txid, 12, 8))}</span></div>
+          <p id="conf" class="hint"><span class="spin"></span> waiting for the network…</p><div class="stack"><button class="btn primary" id="ok">Done</button></div>`,
+        (m2, close2) => m2.querySelector('#ok').addEventListener('click', () => { close2(); S.tab = 'home'; renderMain(); }));
         try {
           await w.waitAccepted(r.txid, 60_000);
           const el = document.getElementById('conf');
-          if (el) { el.className = 'hint ok'; el.textContent = `Confirmado pela rede em ${((Date.now() - t0) / 1000).toFixed(1).replace('.', ',')} s.`; }
-        } catch { const el = document.getElementById('conf'); if (el) el.textContent = 'Ainda não confirmado; a carteira continua acompanhando.'; }
+          if (el) { el.className = 'hint ok'; el.textContent = `Confirmed by the network in ${((Date.now() - t0) / 1000).toFixed(1)} s.`; }
+        } catch { const el = document.getElementById('conf'); if (el) el.textContent = 'Not confirmed yet; the wallet keeps watching.'; }
         void done;
         syncNow();
       }));
@@ -392,7 +399,7 @@ function paintSend() {
 
 async function scanQr(onText) {
   let stream, stop = false;
-  const close = modal('<h1>Ler QR code</h1><video class="cam" autoplay playsinline muted></video><div class="stack mt"><button class="btn" id="x">Fechar</button></div>',
+  const close = modal('<h1>Scan QR code</h1><video class="cam" autoplay playsinline muted></video><div class="stack mt"><button class="btn" id="x">Close</button></div>',
     (m, closeFn) => m.querySelector('#x').addEventListener('click', closeFn));
   const finish = () => { stop = true; stream?.getTracks().forEach((t) => t.stop()); close(); };
   try {
@@ -402,11 +409,11 @@ async function scanQr(onText) {
     const det = new BarcodeDetector({ formats: ['qr_code'] });
     const loop = async () => {
       if (stop || !document.body.contains(video)) { stream.getTracks().forEach((t) => t.stop()); return; }
-      try { const codes = await det.detect(video); if (codes[0]) { finish(); onText(codes[0].rawValue); return; } } catch { /* quadro ainda não pronto */ }
+      try { const codes = await det.detect(video); if (codes[0]) { finish(); onText(codes[0].rawValue); return; } } catch { /* frame not ready yet */ }
       requestAnimationFrame(loop);
     };
     loop();
-  } catch (e) { finish(); toast(`Câmera indisponível: ${e.message}`, true); }
+  } catch (e) { finish(); toast(`Camera unavailable: ${e.message}`, true); }
 }
 
 function paintSettings() {
@@ -414,58 +421,58 @@ function paintSettings() {
   const view = document.getElementById('view');
   const delegated = !!w.light.delegate;
   const [srv1, srv2 = ''] = w.serverUrl.split(',');
-  view.innerHTML = `<h2>Servidor</h2><div class="card">
-      <label for="srv">Servidor leve</label><input id="srv" value="${esc(srv1)}" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <label for="srv2">Segundo servidor (opcional)</label><input id="srv2" value="${esc(srv2)}" placeholder="de outra pessoa ou empresa" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <p class="hint">Com dois servidores de donos diferentes, a carteira compara as respostas: se um esconder um pagamento ou mostrar uma moeda que já foi gasta, o outro denuncia.</p>
-      <div class="stack mt"><button class="btn" id="save-srv">Salvar servidores</button></div>
-      <label>Como encontrar seus pagamentos</label>
-      <div class="seg" role="group" aria-label="Varredura"><button data-scan="local" aria-pressed="${!delegated}">Neste aparelho</button><button data-scan="delegada" aria-pressed="${delegated}">Pelo servidor</button></div>
+  view.innerHTML = `<h2>Server</h2><div class="card">
+      <label for="srv">Light server</label><input id="srv" value="${esc(srv1)}" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label for="srv2">Second server (optional)</label><input id="srv2" value="${esc(srv2)}" placeholder="run by another person or company" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <p class="hint">With two servers run by different owners, the wallet compares their answers: if one hides a payment or shows a coin that was already spent, the other exposes it.</p>
+      <div class="stack mt"><button class="btn" id="save-srv">Save servers</button></div>
+      <label>How to find your payments</label>
+      <div class="seg" role="group" aria-label="Scanning"><button data-scan="local" aria-pressed="${!delegated}">On this device</button><button data-scan="delegated" aria-pressed="${delegated}">By the server</button></div>
       <p class="hint">${delegated
-    ? 'Pelo servidor: economiza bateria, mas ele recebe sua chave de visualização e vê o que você recebe (continua sem poder gastar).'
-    : 'Neste aparelho (recomendado): o servidor não recebe nenhuma chave e não sabe quais pagamentos são seus.'}</p></div>
-    <h2>Segurança</h2><div class="card stack">
-      <button class="btn" id="phrase">Mostrar frase de recuperação</button>
-      <button class="btn" id="viewkey">Copiar chave de visualização (só leitura)</button>
-      <button class="btn danger" id="forget">Apagar a carteira deste aparelho</button></div>
-    <h2>Sobre</h2><div class="card small muted">
-      <p>Rede <b>${esc(w.network)}</b>. Carteira leve: a varredura acontece aqui, e cada valor recebido só conta depois de uma prova (Merkle + ${esc(String(w.proofDepth))} blocos com prova de trabalho por cima).</p>
-      <p>Endereços quânticos (krq) e multiassinatura ficam na carteira de linha de comando.</p></div>`;
-  on('#save-srv', 'click', (e) => busy(e.currentTarget, 'Conferindo…', async () => {
+    ? 'By the server: saves battery, but the server receives your view key and sees what you receive (it still cannot spend).'
+    : 'On this device (recommended): the server receives no key and does not know which payments are yours.'}</p></div>
+    <h2>Security</h2><div class="card stack">
+      <button class="btn" id="phrase">Show recovery phrase</button>
+      <button class="btn" id="viewkey">Copy view key (read-only)</button>
+      <button class="btn danger" id="forget">Remove the wallet from this device</button></div>
+    <h2>About</h2><div class="card small muted">
+      <p>Network <b>${esc(w.network)}</b>. Light wallet: scanning happens here, and every amount received only counts after a proof (Merkle + ${esc(String(w.proofDepth))} blocks with proof of work on top).</p>
+      <p>Quantum-safe addresses (krq) and multisig are available in the command-line wallet.</p></div>`;
+  on('#save-srv', 'click', (e) => busy(e.currentTarget, 'Checking…', async () => {
     const urls = [$('#srv').value, $('#srv2').value].map((u) => u.trim().replace(/\/+$/, '')).filter(Boolean);
-    if (!urls.length) throw new Error('informe o servidor leve');
-    if (urls.length === 2 && urls[0] === urls[1]) throw new Error('o segundo servidor precisa ser diferente do primeiro');
+    if (!urls.length) throw new Error('enter the light server');
+    if (urls.length === 2 && urls[0] === urls[1]) throw new Error('the second server must be different from the first');
     for (const url of urls) {
       const info = await new LightClient(url).info();
-      if (info.network !== w.network) throw new Error(`${url} é da rede ${info.network}`);
+      if (info.network !== w.network) throw new Error(`${url} is on the ${info.network} network`);
     }
     w.setServer(urls.join(','));
-    toast(urls.length === 2 ? 'Servidores salvos: a carteira vai comparar os dois' : 'Servidor salvo');
+    toast(urls.length === 2 ? 'Servers saved: the wallet will compare them' : 'Server saved');
     syncNow();
   }));
-  view.querySelectorAll('[data-scan]').forEach((b) => b.addEventListener('click', () => { w.setDelegated(b.dataset.scan === 'delegada'); paintSettings(); syncNow(); }));
-  on('#phrase', 'click', () => askPassword('Mostrar a frase', async (pw) => {
-    const phrase = await w.revealMnemonic(pw); // decifrada agora; não fica guardada na memória
-    modal(`<h1>Frase de recuperação</h1><p class="muted small">Não tire foto. Não mostre a ninguém.</p>
+  view.querySelectorAll('[data-scan]').forEach((b) => b.addEventListener('click', () => { w.setDelegated(b.dataset.scan === 'delegated'); paintSettings(); syncNow(); }));
+  on('#phrase', 'click', () => askPassword('Show the phrase', async (pw) => {
+    const phrase = await w.revealMnemonic(pw); // decrypted now; not kept in memory
+    modal(`<h1>Recovery phrase</h1><p class="muted small">Do not take a photo. Do not show it to anyone.</p>
       <ol class="words">${phrase.split(' ').map((x) => `<li>${esc(x)}</li>`).join('')}</ol>
-      <div class="stack mt"><button class="btn" id="x">Fechar</button></div>`, (m, close) => m.querySelector('#x').addEventListener('click', close));
+      <div class="stack mt"><button class="btn" id="x">Close</button></div>`, (m, close) => m.querySelector('#x').addEventListener('click', close));
   }));
   on('#viewkey', 'click', () => copy(w.keys.viewKey(w.params)));
-  on('#forget', 'click', () => modal(`<h1>Apagar deste aparelho?</h1>
-      <p>O dinheiro não some — ele está na rede. Mas sem a frase de recuperação você <b>não</b> conseguirá abrir esta carteira de novo.</p>
-      <div class="stack"><button class="btn danger" id="yes">Apagar</button><button class="btn" id="no">Cancelar</button></div>`, (m, close) => {
+  on('#forget', 'click', () => modal(`<h1>Remove from this device?</h1>
+      <p>The money does not disappear — it is on the network. But without the recovery phrase you will <b>not</b> be able to open this wallet again.</p>
+      <div class="stack"><button class="btn danger" id="yes">Remove</button><button class="btn" id="no">Cancel</button></div>`, (m, close) => {
     m.querySelector('#no').addEventListener('click', close);
-    m.querySelector('#yes').addEventListener('click', () => { w.forget(); close(); clearInterval(S.timer); S.w = null; render(); toast('Carteira apagada deste aparelho'); });
+    m.querySelector('#yes').addEventListener('click', () => { w.forget(); close(); clearInterval(S.timer); S.w = null; render(); toast('Wallet removed from this device'); });
   }));
 }
 
 function askPassword(title, then) {
-  modal(`<h1>${esc(title)}</h1><label for="ap">Senha</label><input id="ap" type="password" autocomplete="current-password">
-    <div class="stack mt"><button class="btn primary" id="ok">Confirmar</button><button class="btn" id="no">Cancelar</button></div>`, (m, close) => {
+  modal(`<h1>${esc(title)}</h1><label for="ap">Password</label><input id="ap" type="password" autocomplete="current-password">
+    <div class="stack mt"><button class="btn primary" id="ok">Confirm</button><button class="btn" id="no">Cancel</button></div>`, (m, close) => {
     m.querySelector('#no').addEventListener('click', close);
-    m.querySelector('#ok').addEventListener('click', (e) => busy(e.currentTarget, 'Conferindo…', async () => {
+    m.querySelector('#ok').addEventListener('click', (e) => busy(e.currentTarget, 'Checking…', async () => {
       const pw = m.querySelector('#ap').value;
-      if (!(await S.w.checkPassword(pw))) throw new Error('senha incorreta');
+      if (!(await S.w.checkPassword(pw))) throw new Error('wrong password');
       close();
       await then(pw);
     }));

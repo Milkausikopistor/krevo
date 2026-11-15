@@ -10,7 +10,7 @@ grows as other volunteers join. This guide is for those volunteers.
 
 | | |
 |---|---|
-| Network name | `testnet` (`--rede testnet` / `--network testnet`) |
+| Network name | `testnet` (`--network testnet`) |
 | Genesis | fixed in `src/params.js` / `rust/krevod/src/params.rs` (message `Krevo testnet`) |
 | Ports | P2P **16210** (open to the Internet), RPC 16211 (keep private) |
 | Addresses | `krvtest1…` transparent, `krstest1…` private, `krqtest1…` quantum-safe |
@@ -41,11 +41,11 @@ docker compose up -d                       # node (Rust) + light server + explor
 docker compose logs -f no                  # watch it sync
 ```
 
-- Mining: `ENDERECO_MINERACAO=krvtest1… docker compose --profile minerar up -d`
+- Mining: `MINING_ADDRESS=krvtest1… docker compose --profile mine up -d`
   (create that wallet on your own computer — `node src/cli.js wallet create --network testnet` — and
   only give the address to the server; **keep the wallet file and its recovery phrase safe**).
-- Faucet: create a wallet with a password inside the `torneira` volume, send it some mined KRV
-  (transparent address), then `KREVO_SENHA=… docker compose --profile torneira up -d`.
+- Faucet: create a wallet with a password inside the `faucet` volume, send it some mined KRV
+  (transparent address), then `KREVO_PASSWORD=… docker compose --profile faucet up -d`.
 - Put a reverse proxy with HTTPS in front of ports 8080 (explorer), 8090 (light server),
   8091 (web wallet) and 8092 (faucet). Example `Caddyfile`:
 
@@ -65,8 +65,8 @@ Requirements: Node.js **24.7+** (tested on 26); for the Rust node, a stable Rust
 
 ```bash
 # node — JavaScript (reference) or Rust (faster); both speak the same protocol
-node src/cli.js node --network testnet --datadir ./dados
-cd rust/krevod && cargo build --release && ./target/release/krevod node --network testnet --datadir ./dados
+node src/cli.js node --network testnet --datadir ./data
+cd rust/krevod && cargo build --release && ./target/release/krevod node --network testnet --datadir ./data
 
 # the rest talks to the node's RPC (default http://127.0.0.1:16211)
 node src/cli.js wallet create --network testnet                       # asks for nothing; add --password to encrypt
@@ -74,7 +74,7 @@ node src/cli.js mine --network testnet --address krvtest1… --threads 2
 node src/cli.js light-server --network testnet --public               # public: put HTTPS in front
 node src/cli.js explorer --network testnet --public
 node src/cli.js web-wallet --public
-KREVO_SENHA=… node src/cli.js faucet --network testnet --file carteira-torneira-testnet.json --public --trusted-proxy
+KREVO_PASSWORD=… node src/cli.js faucet --network testnet --file faucet-wallet-testnet.json --public --trusted-proxy
 ```
 
 Run them under a service manager (systemd, pm2, Docker) so they restart on failure.
@@ -114,7 +114,7 @@ data directory. Announce resets in the repository well in advance.
 - Never expose the node's RPC port (16211) to the Internet; the light server and explorer are the
   public faces.
 - The faucet wallet is a hot wallet: keep only what it needs, protect it with a password
-  (`KREVO_SENHA` in an environment file readable only by the service).
+  (`KREVO_PASSWORD` in an environment file readable only by the service).
 - Keep wallet files and recovery phrases out of the repository and out of Docker images
-  (`.gitignore` and `.dockerignore` already exclude `carteira-*.json` and data directories).
+  (`.gitignore` and `.dockerignore` already exclude wallet files (`wallet-*.json`, `*-wallet-*.json`) and data directories).
 - Report vulnerabilities privately (see `docs/SECURITY.md`).

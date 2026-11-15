@@ -1,20 +1,20 @@
-// Troca atômica Krevo ⇄ Bitcoin — sem corretora e sem confiar na outra parte.
+// Krevo ⇄ Bitcoin atomic swap — no exchange and no need to trust the other party.
 //
-// Duas pessoas: quem INICIA (cria o segredo) e quem PARTICIPA.
-//   1. o iniciador cria a oferta (código krx1…) com H = SHA-256(segredo); o segredo fica com ele
-//   2. o participante aceita (código krx1… de aceite) — ainda nenhum dinheiro se move
-//   3. o iniciador trava o que vende num contrato HTLC (prazo LONGO)
-//   4. o participante confere na rede e trava o que vende noutro HTLC com o MESMO H (prazo CURTO)
-//   5. o iniciador resgata o contrato do participante — e, ao resgatar, PUBLICA o segredo
-//   6. o participante lê o segredo na rede e resgata o contrato do iniciador
-// Se alguém sumir no meio, cada um pega de volta o que travou depois do próprio prazo. O prazo
-// do participante é menor, para que ele sempre tenha tempo de usar o segredo revelado.
+// Two people: the INITIATOR (creates the secret) and the PARTICIPANT.
+//   1. the initiator creates the offer (code krx1…) with H = SHA-256(secret); the secret stays with them
+//   2. the participant accepts (acceptance code krx1…) — no money moves yet
+//   3. the initiator locks what they sell in an HTLC contract (LONG deadline)
+//   4. the participant checks on the network and locks what they sell in another HTLC with the SAME H (SHORT deadline)
+//   5. the initiator claims the participant's contract — and, by claiming, PUBLISHES the secret
+//   6. the participant reads the secret on the network and claims the initiator's contract
+// If someone disappears halfway, each one takes back what they locked after their own deadline.
+// The participant's deadline is shorter, so they always have time to use the revealed secret.
 //
-// Contratos:
-//   Krevo:   política v3 com 2 caminhos — [resgate: chave de quem recebe + segredo]
-//            ou [reembolso: chave de quem travou, depois de N blocos] (src/consensus/policy.js)
-//   Bitcoin: script P2WSH com OP_SHA256 + OP_CHECKLOCKTIMEVERIFY (src/btc/script.js)
-// As chaves (Krevo e Bitcoin) e o segredo de cada troca vêm da frase de 24 palavras.
+// Contracts:
+//   Krevo:   v3 policy with 2 paths — [claim: recipient's key + secret]
+//            or [refund: key of whoever locked, after N blocks] (src/consensus/policy.js)
+//   Bitcoin: P2WSH script with OP_SHA256 + OP_CHECKLOCKTIMEVERIFY (src/btc/script.js)
+// The keys (Krevo and Bitcoin) and the secret of each swap come from the 24-word phrase.
 
 import { Writer, Reader, toHex, fromHex } from '../util/bytes.js';
 import { encode as bech32mEncode, decode as bech32mDecode } from '../util/bech32m.js';
@@ -32,13 +32,13 @@ import { Esplora, defaultBtcApi } from '../btc/esplora.js';
 import { BitcoinCore } from '../btc/core.js';
 
 const VERSION = 1, MSG_OFFER = 1, MSG_ACCEPT = 2;
-const DIRS = ['krv', 'btc'];                       // o que o INICIADOR vende
+const DIRS = ['krv', 'btc'];                       // what the INITIATOR sells
 const BTC_NETS = ['mainnet', 'testnet', 'signet', 'regtest'];
 export const DEFAULT_INITIATOR_WINDOW = 48 * 3600;
 export const DEFAULT_PARTICIPANT_WINDOW = 24 * 3600;
 const MIN_BTC = 10_000n;
 
-// ------------------------------------------------------------------ valores BTC
+// ------------------------------------------------------------------ BTC amounts
 const SAT = 100_000_000n;
 export function formatBTC(sats) {
   sats = BigInt(sats);
@@ -48,20 +48,20 @@ export function formatBTC(sats) {
 const btcDecimal = (sats) => { const f = (sats % SAT).toString().padStart(8, '0').replace(/0+$/, ''); return `${sats / SAT}${f ? '.' + f : ''}`; };
 export function parseBTC(str) {
   const s = String(str).trim().replace(',', '.');
-  if (!/^\d+(\.\d{1,8})?$/.test(s)) throw new Error(`valor em BTC inválido: ${str}`);
+  if (!/^\d+(\.\d{1,8})?$/.test(s)) throw new Error(`invalid BTC amount: ${str}`);
   const [w, f = ''] = s.split('.');
   return BigInt(w) * SAT + BigInt(f.padEnd(8, '0'));
 }
 export function formatDuration(sec) {
   sec = Math.round(sec);
-  if (sec < 0) return 'já passou';
+  if (sec < 0) return 'already passed';
   if (sec < 120) return `${sec} s`;
   if (sec < 7200) return `${Math.round(sec / 60)} min`;
   if (sec < 172_800) return `${(sec / 3600).toFixed(1).replace('.', ',')} h`;
   return `${(sec / 86400).toFixed(1).replace('.', ',')} dias`;
 }
 
-// --------------------------------------------------------------- mensagens krx1…
+// --------------------------------------------------------------- krx1… messages
 function encodeOffer(o) {
   const w = new Writer();
   w.u8(VERSION); w.u8(MSG_OFFER); w.u8(DIRS.indexOf(o.dir)); w.u8(BTC_NETS.indexOf(o.btcNet));
@@ -71,9 +71,9 @@ function encodeOffer(o) {
 }
 function decodeOffer(b) {
   const r = new Reader(b);
-  if (r.u8() !== VERSION || r.u8() !== MSG_OFFER) throw new Error('não é uma oferta de troca');
+  if (r.u8() !== VERSION || r.u8() !== MSG_OFFER) throw new Error('not a swap offer');
   const dir = DIRS[r.u8()], btcNet = BTC_NETS[r.u8()];
-  if (!dir || !btcNet) throw new Error('oferta de troca inválida');
+  if (!dir || !btcNet) throw new Error('invalid swap offer');
   const o = {
     dir, btcNet, krv: r.u64(), btc: r.u64(), hash: r.bytes(32), iKrv: r.bytes(33), iBtc: r.bytes(33),
     iWindow: Number(r.u64()), pWindow: Number(r.u64()), created: Number(r.u64()),
@@ -90,7 +90,7 @@ function encodeAccept(a) {
 }
 function decodeAccept(b) {
   const r = new Reader(b);
-  if (r.u8() !== VERSION || r.u8() !== MSG_ACCEPT) throw new Error('não é um aceite de troca');
+  if (r.u8() !== VERSION || r.u8() !== MSG_ACCEPT) throw new Error('not a swap acceptance');
   const a = { offerHash: r.bytes(32), pKrv: r.bytes(33), pBtc: r.bytes(33), accepted: Number(r.u64()) };
   r.end();
   Point.fromBytes(a.pKrv); Point.fromBytes(a.pBtc);
@@ -101,36 +101,36 @@ const swapId = (bytes) => toHex(offerHash(bytes)).slice(0, 12);
 
 export function decodeSwapCode(params, code) {
   const { hrp, bytes } = bech32mDecode(String(code).trim());
-  if (hrp !== params.hrp.x) throw new Error(`código de troca de outra rede (prefixo ${hrp}, esperado ${params.hrp.x})`);
+  if (hrp !== params.hrp.x) throw new Error(`swap code from another network (prefix ${hrp}, expected ${params.hrp.x})`);
   if (bytes[1] === MSG_OFFER) return { kind: 'offer', bytes, offer: decodeOffer(bytes) };
   if (bytes[1] === MSG_ACCEPT) return { kind: 'accept', bytes, accept: decodeAccept(bytes) };
-  throw new Error('código de troca desconhecido');
+  throw new Error('unknown swap code');
 }
 
 function validateTerms(o) {
-  if (o.krv <= 0n) throw new Error('valor em KRV precisa ser positivo');
-  if (o.btc < MIN_BTC) throw new Error(`valor em BTC pequeno demais (mínimo ${formatBTC(MIN_BTC)}, para cobrir as taxas do Bitcoin)`);
-  if (!(o.pWindow > 0) || !(o.iWindow >= o.pWindow * 1.5)) throw new Error('o prazo do iniciador precisa ser pelo menos 1,5× o do participante');
+  if (o.krv <= 0n) throw new Error('the KRV amount must be positive');
+  if (o.btc < MIN_BTC) throw new Error(`BTC amount too small (minimum ${formatBTC(MIN_BTC)}, to cover Bitcoin fees)`);
+  if (!(o.pWindow > 0) || !(o.iWindow >= o.pWindow * 1.5)) throw new Error('the initiator\'s deadline must be at least 1.5× the participant\'s');
 }
 
-/** Krevo mainnet ↔ Bitcoin mainnet; redes de teste da Krevo ↔ só Bitcoin de teste. */
+/** Krevo mainnet ↔ Bitcoin mainnet; Krevo test networks ↔ test Bitcoin only. */
 export function checkPairing(params, btcNet) {
   if ((params.name === 'mainnet') !== (btcNet === 'mainnet')) {
     throw new Error(params.name === 'mainnet'
-      ? 'na Krevo mainnet a troca precisa ser com Bitcoin mainnet'
-      : `a rede Krevo "${params.name}" é de teste: só troca com Bitcoin de teste (testnet, signet ou regtest) — nunca com bitcoins de verdade`);
+      ? 'on Krevo mainnet the swap must be with Bitcoin mainnet'
+      : `the Krevo "${params.name}" network is a test network: it only swaps with test Bitcoin (testnet, signet or regtest) — never with real bitcoins`);
   }
 }
 
-// ------------------------------------------------------------------ contratos
+// ------------------------------------------------------------------ contracts
 export function swapKeys(w, index) {
-  // chaves no cofre; o segredo da troca (pré-imagem do hash) pode sair: ele é revelado no resgate
+  // keys in the vault; the swap secret (hash preimage) may leave: it is revealed when claiming
   const v = w.keys.vault;
   const krv = v.signer({ swapKrv: index }), btc = v.signer({ swapBtc: index });
   return { krv, krvPub: krv.P.toBytes(), btc, btcPub: btc.P.toBytes(), secret: v.swapSecret(index) };
 }
 
-/** Os dois contratos da troca. initiatorLock = o que o iniciador trava; participantLock = idem. */
+/** The swap's two contracts. initiatorLock = what the initiator locks; participantLock = likewise. */
 export function swapContracts(params, offer, accept) {
   const net = btcNetwork(offer.btcNet);
   const krevo = (claimPub, refundPub, windowSec) => {
@@ -149,12 +149,12 @@ export function swapContracts(params, offer, accept) {
 const fmtAmount = (c) => (c.chain === 'krevo' ? formatKRV(c.amount) : formatBTC(c.amount));
 const nowS = (w) => (w.clock ? w.clock() : Math.floor(Date.now() / 1000));
 
-// ------------------------------------------------------------------ registro na carteira
+// ------------------------------------------------------------------ record in the wallet
 function store(w) { return (w.data.swaps ??= {}); }
 export function getSwap(w, id) {
   const all = store(w);
   const s = all[id] ?? Object.values(all).find((x) => x.id.startsWith(id));
-  if (!s) throw new Error(`troca ${id} não encontrada nesta carteira`);
+  if (!s) throw new Error(`swap ${id} not found in this wallet`);
   return s;
 }
 function parts(s) {
@@ -162,8 +162,8 @@ function parts(s) {
   const accept = s.accept ? decodeAccept(fromHex(s.accept)) : null;
   return { offer, accept };
 }
-// Fonte de dados do Bitcoin: o seu Bitcoin Core (btcRpc) ou uma API Esplora (btcApi / mempool.space).
-// Um cliente por processo e por troca: o Bitcoin Core só reescaneia uma vez.
+// Bitcoin data source: your Bitcoin Core (btcRpc) or an Esplora API (btcApi / mempool.space).
+// One client per process and per swap: Bitcoin Core only rescans once.
 const btcClients = new Map();
 async function btcClient(s, offer) {
   const key = s.btcRpc ? `rpc:${s.btcRpc}:${offer.created}` : `api:${s.btcApi || defaultBtcApi(offer.btcNet)}`;
@@ -179,14 +179,14 @@ async function btcClient(s, offer) {
 }
 
 /**
- * Cria uma oferta. sell: 'krv' (vendo KRV, recebo BTC) ou 'btc' (vendo BTC, recebo KRV).
- * btcPayout: SEU endereço Bitcoin — onde você recebe os BTC, ou para onde volta o reembolso.
+ * Creates an offer. sell: 'krv' (I sell KRV, receive BTC) or 'btc' (I sell BTC, receive KRV).
+ * btcPayout: YOUR Bitcoin address — where you receive the BTC, or where the refund goes back.
  */
 export function createOffer(w, { sell, krv, btc, btcNet = 'regtest', btcPayout, iWindow = DEFAULT_INITIATOR_WINDOW, pWindow = DEFAULT_PARTICIPANT_WINDOW, btcApi = null, btcRpc = null }) {
-  if (!DIRS.includes(sell)) throw new Error('informe o que você vende: krv ou btc');
+  if (!DIRS.includes(sell)) throw new Error('enter what you sell: krv or btc');
   checkPairing(w.params, btcNet);
   const net = btcNetwork(btcNet);
-  if (!btcPayout) throw new Error('informe o seu endereço Bitcoin (para receber ou para o reembolso)');
+  if (!btcPayout) throw new Error('enter your Bitcoin address (to receive, or for the refund)');
   decodeBtcAddress(net, btcPayout);
   const index = (w.data.swapNext = (w.data.swapNext ?? 0) + 1) - 1;
   const k = swapKeys(w, index);
@@ -199,19 +199,19 @@ export function createOffer(w, { sell, krv, btc, btcNet = 'regtest', btcPayout, 
   return { id, code: bech32mEncode(w.params.hrp.x, bytes), offer };
 }
 
-/** Lado do participante: aceita uma oferta (nada se move ainda). Retorna o código de aceite. */
+/** Participant's side: accepts an offer (nothing moves yet). Returns the acceptance code. */
 export function acceptOffer(w, code, { btcPayout, btcApi = null, btcRpc = null }) {
   const d = decodeSwapCode(w.params, code);
-  if (d.kind !== 'offer') throw new Error('isto não é uma oferta (é um aceite?)');
+  if (d.kind !== 'offer') throw new Error('this is not an offer (is it an acceptance?)');
   const offer = d.offer;
   checkPairing(w.params, offer.btcNet);
   const net = btcNetwork(offer.btcNet);
-  if (!btcPayout) throw new Error('informe o seu endereço Bitcoin (para receber ou para o reembolso)');
+  if (!btcPayout) throw new Error('enter your Bitcoin address (to receive, or for the refund)');
   decodeBtcAddress(net, btcPayout);
   const id = swapId(d.bytes);
-  if (store(w)[id]) throw new Error('esta troca já está registrada nesta carteira');
+  if (store(w)[id]) throw new Error('this swap is already registered in this wallet');
   const age = nowS(w) - offer.created;
-  if (offer.dir === 'btc' && offer.iWindow - age < offer.pWindow * 1.25) throw new Error('esta oferta é antiga demais: o prazo do iniciador já está curto');
+  if (offer.dir === 'btc' && offer.iWindow - age < offer.pWindow * 1.25) throw new Error('this offer is too old: the initiator\'s deadline is already short');
   const index = (w.data.swapNext = (w.data.swapNext ?? 0) + 1) - 1;
   const k = swapKeys(w, index);
   const accept = { offerHash: offerHash(d.bytes), pKrv: k.krvPub, pBtc: k.btcPub, accepted: nowS(w) };
@@ -221,21 +221,21 @@ export function acceptOffer(w, code, { btcPayout, btcApi = null, btcRpc = null }
   return { id, code: bech32mEncode(w.params.hrp.x, bytes), offer };
 }
 
-/** Lado do iniciador: registra o aceite recebido. */
+/** Initiator's side: records the acceptance received. */
 export function importAcceptance(w, code) {
   const d = decodeSwapCode(w.params, code);
-  if (d.kind !== 'accept') throw new Error('isto não é um aceite de troca');
+  if (d.kind !== 'accept') throw new Error('this is not a swap acceptance');
   const s = Object.values(store(w)).find((x) => x.role === 'initiator' && offerHash(fromHex(x.offer)).equals(d.accept.offerHash));
-  if (!s) throw new Error('este aceite não corresponde a nenhuma oferta criada por esta carteira');
-  if (s.accept && s.accept !== toHex(d.bytes)) throw new Error('esta oferta já foi aceita por outra pessoa');
+  if (!s) throw new Error('this acceptance does not match any offer created by this wallet');
+  if (s.accept && s.accept !== toHex(d.bytes)) throw new Error('this offer was already accepted by someone else');
   const { offer } = parts(s);
-  if (d.accept.accepted < offer.created - 600) throw new Error('aceite com data anterior à oferta');
+  if (d.accept.accepted < offer.created - 600) throw new Error('acceptance dated before the offer');
   s.accept = toHex(d.bytes);
   w.save();
   return s;
 }
 
-/** Resumo legível dos termos, do ponto de vista desta carteira. */
+/** Readable summary of the terms, from this wallet's point of view. */
 export function describeSwap(w, s) {
   const { offer, accept } = parts(s);
   const iAmInit = s.role === 'initiator';
@@ -244,7 +244,7 @@ export function describeSwap(w, s) {
     id: s.id, role: iAmInit ? 'iniciador' : 'participante', btcNet: offer.btcNet,
     give: krvGive ? formatKRV(offer.krv) : formatBTC(offer.btc), receive: krvGive ? formatBTC(offer.btc) : formatKRV(offer.krv),
     windows: { initiator: offer.iWindow, participant: offer.pWindow }, accepted: !!accept, btcPayout: s.btcPayout,
-    price: `${(Number(offer.btc) / Number(offer.krv)).toPrecision(4).replace('.', ',')} BTC por KRV`,
+    price: `${(Number(offer.btc) / Number(offer.krv)).toPrecision(4)} BTC per KRV`,
   };
   if (accept) {
     const c = swapContracts(w.params, offer, accept);
@@ -254,9 +254,9 @@ export function describeSwap(w, s) {
   return out;
 }
 
-export function listSwaps(w) { return Object.values(store(w)).map((s) => ({ ...describeSwap(w, s), status: s.status ?? 'em andamento' })); }
+export function listSwaps(w) { return Object.values(store(w)).map((s) => ({ ...describeSwap(w, s), status: s.status ?? 'in progress' })); }
 
-// ------------------------------------------------------------------ observar as redes
+// ------------------------------------------------------------------ watching the networks
 async function observeKrevo(w, c, hash) {
   const r = await w.call('getutxos', { locks: [toHex(c.lock)] });
   const daa = r.daaScore;
@@ -306,7 +306,7 @@ async function observeBtc(btc, c, hash, minConf, now) {
   return st;
 }
 
-// ------------------------------------------------------------------ gastar os contratos
+// ------------------------------------------------------------------ spending the contracts
 async function spendContract(w, s, offer, c, st, keys, secret, feeRate) {
   if (c.chain === 'btc') {
     const btc = await btcClient(s, offer);
@@ -326,14 +326,14 @@ async function spendContract(w, s, offer, c, st, keys, secret, feeRate) {
 }
 
 /**
- * Dá o próximo passo da troca (no máximo UMA ação por chamada) e diz o que está acontecendo.
- * Retorna { action, message, done, ... }. Ações: lock, pay-btc, claim, refund, abort, done, wait-*.
- * dryRun: só diz o que faria.
+ * Takes the swap's next step (at most ONE action per call) and says what is happening.
+ * Returns { action, message, done, ... }. Actions: lock, pay-btc, claim, refund, abort, done, wait-*.
+ * dryRun: only says what it would do.
  */
 export async function swapStep(w, id, { minConf = 1, feeRate, dryRun = false } = {}) {
   const s = getSwap(w, id);
   const { offer, accept } = parts(s);
-  if (!accept) return { action: 'wait-accept', done: false, message: 'aguardando a outra parte aceitar — envie a ela o código da oferta (krx1…)' };
+  if (!accept) return { action: 'wait-accept', done: false, message: 'waiting for the other party to accept — send them the offer code (krx1…)' };
   const c = swapContracts(w.params, offer, accept);
   const keys = swapKeys(w, s.index);
   const iAmInit = s.role === 'initiator';
@@ -345,66 +345,66 @@ export async function swapStep(w, id, { minConf = 1, feeRate, dryRun = false } =
   const my = myC.chain === 'btc' ? bst : kst, their = theirC.chain === 'btc' ? bst : kst;
   const base = { my, their, myContract: myC, theirContract: theirC };
   const out = (action, message, done = false, extra = {}) => {
-    if (done && !dryRun && s.status !== action) { s.status = action === 'abort' ? 'abandonada' : my.refunded ? 'reembolsada' : 'concluída'; w.save(); }
+    if (done && !dryRun && s.status !== action) { s.status = action === 'abort' ? 'abandoned' : my.refunded ? 'refunded' : 'completed'; w.save(); }
     return { ...base, action, message, done, ...extra };
   };
 
-  // o participante descobre o segredo quando o iniciador resgata o contrato DELE
+  // the participant learns the secret when the initiator claims THEIR contract
   if (!s.secret && my.secret) { s.secret = toHex(my.secret); if (!dryRun) w.save(); }
   const secret = s.secret ? fromHex(s.secret) : null;
 
-  if (their.claimed) return out('done', `troca concluída: você recebeu ${fmtAmount(theirC)} (menos a taxa de rede do resgate)`, true);
-  if (my.refunded && !my.funded) return out('done', 'troca cancelada: o que você travou voltou para você (reembolso)', true);
+  if (their.claimed) return out('done', `swap completed: you received ${fmtAmount(theirC)} (minus the network fee of the claim)`, true);
+  if (my.refunded && !my.funded) return out('done', 'swap cancelled: what you locked came back to you (refund)', true);
 
-  // 1) resgatar o que a outra parte travou
+  // 1) claim what the other party locked
   if (secret && their.funded && !their.claimed && !their.spending) {
     const claimMargin = offer.pWindow / 8;
-    // o iniciador só revela o segredo se ainda houver folga antes do prazo do participante
+    // the initiator only reveals the secret if there is still slack before the participant's deadline
     if (!iAmInit || (their.timeLeft !== null && their.timeLeft >= claimMargin)) {
       if (dryRun) return out('claim', `resgatar ${fmtAmount(theirC)}`);
       const r = await spendContract(w, s, offer, theirC, their, keys, secret, feeRate);
       s.claimTxid = r.txid; w.save();
-      return out('claim', `resgate enviado: ${r.amount} (taxa ${r.fee}) — tx ${r.txid}${iAmInit ? '. O segredo agora está público; a outra parte vai usá-lo para resgatar.' : ''}`, false, { txid: r.txid });
+      return out('claim', `claim sent: ${r.amount} (fee ${r.fee}) — tx ${r.txid}${iAmInit ? '. The secret is now public; the other party will use it to claim.' : ''}`, false, { txid: r.txid });
     }
   }
-  // 2) reembolso do que eu travei, depois do meu prazo
+  // 2) refund of what I locked, after my deadline
   if (my.refundable && !my.claimed && !my.spending) {
-    if (dryRun) return out('refund', 'reembolsar o que você travou');
+    if (dryRun) return out('refund', 'refund what you locked');
     const r = await spendContract(w, s, offer, myC, my, keys, null, feeRate);
     s.refundTxid = r.txid; w.save();
-    return out('refund', `reembolso enviado: ${r.amount} (taxa ${r.fee}) — tx ${r.txid}`, false, { txid: r.txid });
+    return out('refund', `refund sent: ${r.amount} (fee ${r.fee}) — tx ${r.txid}`, false, { txid: r.txid });
   }
-  // 3) travar a minha parte
+  // 3) lock my part
   if (!my.funded && !my.claimed && !my.refunded) {
     if (!iAmInit) {
-      if (!their.funded) return out('wait-their-lock', `aguardando o iniciador travar ${fmtAmount(theirC)}${theirC.chain === 'btc' ? ` (com ${minConf} confirmação(ões))` : ''} no contrato ${theirC.address}`);
+      if (!their.funded) return out('wait-their-lock', `waiting for the initiator to lock ${fmtAmount(theirC)}${theirC.chain === 'btc' ? ` (with ${minConf} confirmation(s))` : ''} in the contract ${theirC.address}`);
       const myLeft = myC.chain === 'btc' ? myC.locktime - Math.max(now, bst.tip.time) : offer.pWindow;
       const margin = offer.pWindow / 4;
       if (their.timeLeft < myLeft + margin) {
-        return out('abort', `o prazo do iniciador acaba em ${formatDuration(their.timeLeft)} — curto demais para você travar com segurança. Não trave nada: a troca termina aqui sem perdas para você.`, true);
+        return out('abort', `the initiator's deadline ends in ${formatDuration(their.timeLeft)} — too short for you to lock safely. Do not lock anything: the swap ends here with no loss for you.`, true);
       }
     }
     if (myC.chain === 'krevo') {
-      if (s.lockTxid) return out('wait-my-lock', `aguardando a confirmação da sua trava (tx ${s.lockTxid})`);
+      if (s.lockTxid) return out('wait-my-lock', `waiting for the confirmation of your lock (tx ${s.lockTxid})`);
       if (dryRun) return out('lock', `travar ${fmtAmount(myC)} no contrato ${myC.address}`);
       const r = await w.send({ to: myC.address, amount: myC.amount, from: 'auto' });
       s.lockTxid = r.txid; w.save();
-      return out('lock', `travado ${fmtAmount(myC)} no contrato ${myC.address} (tx ${r.txid}, taxa ${formatKRV(r.fee)})`, false, { txid: r.txid });
+      return out('lock', `locked ${fmtAmount(myC)} in the contract ${myC.address} (tx ${r.txid}, fee ${formatKRV(r.fee)})`, false, { txid: r.txid });
     }
     const uri = `bitcoin:${myC.address}?amount=${btcDecimal(myC.amount)}`;
     return out('pay-btc', my.seen
-      ? `pagamento visto em ${myC.address}; aguardando ${minConf} confirmação(ões) no Bitcoin`
-      : `pague exatamente ${formatBTC(myC.amount)} para ${myC.address} usando a sua carteira Bitcoin (o QR abaixo já leva o valor)`,
+      ? `payment seen at ${myC.address}; waiting for ${minConf} confirmation(s) on Bitcoin`
+      : `pay exactly ${formatBTC(myC.amount)} to ${myC.address} using your Bitcoin wallet (the QR below already includes the amount)`,
     false, { uri, address: myC.address, amount: myC.amount, seen: my.seen });
   }
-  // 4) esperar
+  // 4) wait
   if (iAmInit) {
     if (!their.funded) {
-      return out('wait-their-lock', `sua parte está travada. Aguardando o participante travar ${fmtAmount(theirC)}${theirC.chain === 'btc' ? ` (com ${minConf} confirmação(ões))` : ''}. Se ele não travar, seu reembolso libera em ${formatDuration(my.timeLeft ?? 0)}.`);
+      return out('wait-their-lock', `your part is locked. Waiting for the participant to lock ${fmtAmount(theirC)}${theirC.chain === 'btc' ? ` (with ${minConf} confirmation(s))` : ''}. If they do not lock, your refund unlocks in ${formatDuration(my.timeLeft ?? 0)}.`);
     }
-    return out('wait-refund', `o prazo do participante acaba em ${formatDuration(their.timeLeft)}: por segurança o segredo NÃO será revelado. Seu reembolso libera em ${formatDuration(my.timeLeft ?? 0)}.`);
+    return out('wait-refund', `the participant's deadline ends in ${formatDuration(their.timeLeft)}: for safety the secret will NOT be revealed. Your refund unlocks in ${formatDuration(my.timeLeft ?? 0)}.`);
   }
-  return out('wait-secret', `sua parte está travada. Aguardando o iniciador resgatar (isso revela o segredo). Se ele sumir, seu reembolso libera em ${formatDuration(my.timeLeft ?? 0)}.`);
+  return out('wait-secret', `your part is locked. Waiting for the initiator to claim (that reveals the secret). If they disappear, your refund unlocks in ${formatDuration(my.timeLeft ?? 0)}.`);
 }
 
 export { DUST };

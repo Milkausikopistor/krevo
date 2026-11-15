@@ -1,5 +1,5 @@
-//! Transação (espelha src/consensus/tx.js): um formato para os dois mundos.
-//! txid = hash do CORPO (sem assinaturas/provas); as assinaturas não alteram o id.
+//! Transaction (mirrors src/consensus/tx.js): one format for both worlds.
+//! txid = hash of the BODY (without signatures/proofs); signatures do not change the id.
 
 use crate::bytes::*;
 use crate::hash::H;
@@ -11,7 +11,7 @@ pub struct TIn { pub txid: [u8; 32], pub index: u32, pub sig: Vec<u8> }
 #[derive(Clone, Debug)]
 pub struct SIn {
     pub ring: Vec<([u8; 32], u32)>,
-    /// FCMP: árvore com as `anchor` primeiras saídas privadas (só quando ring é vazio)
+    /// FCMP: tree with the first `anchor` private outputs (only when ring is empty)
     pub anchor: u64,
     pub pseudo: [u8; 33],
     pub key_image: [u8; 33],
@@ -113,7 +113,7 @@ impl Transaction {
         }
         tx.fee = r.u64()?;
         let mass = r.u64()?;
-        if mass > 0xffff_ffff { return Err("massa inválida".into()); }
+        if mass > 0xffff_ffff { return Err("invalid mass".into()); }
         tx.mass = mass;
         tx.payload = r.varbytes(10_000)?.to_vec();
         for i in tx.t_in.iter_mut() { i.sig = r.varbytes(8192)?.to_vec(); }
@@ -122,7 +122,7 @@ impl Transaction {
         }
         tx.range_proof = r.varbytes(4_000)?.to_vec();
         let has_b = r.u8()?;
-        if has_b > 1 { return Err("flag inválida".into()); }
+        if has_b > 1 { return Err("invalid flag".into()); }
         tx.binding_sig = if has_b == 1 { Some(r.arr()?) } else { None };
         Ok(tx)
     }
@@ -145,7 +145,7 @@ impl Transaction {
     pub fn hash_hex(&self) -> String { to_hex(&self.hash()) }
     pub fn size(&self) -> usize { *self.size.get_or_init(|| self.serialize().len()) }
     pub fn sighash(&self) -> [u8; 32] { H::new("tx/sighash").b(&self.id()).d32() }
-    /// Depois de mudar campos à mão (montagem de modelos).
+    /// After changing fields by hand (building templates).
     pub fn invalidate(&mut self) { self.id = OnceLock::new(); self.hash = OnceLock::new(); self.size = OnceLock::new(); }
 }
 

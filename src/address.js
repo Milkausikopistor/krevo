@@ -1,10 +1,10 @@
-// Endereços (Bech32m).
-//   transparente: krv1...  dados = [0x00] + chave pública (33)          — valores públicos
-//   privado:      krs1...  dados = [0x01] + A (33) + B (33)             — valores e destinatário ocultos
-//   visualização: krw1...  dados = [0x02] + a (32) + B (33)             — só leitura, para auditoria
-//   multiassinatura: krv1… dados = [0x03] + hash da política M-de-N (32) — transparente, exige M assinaturas
-//   quântico:     krq1...  dados = [0x04] + hash(chave Schnorr ‖ chave ML-DSA) (32) — transparente, resistente a quântico
-// O prefixo muda por rede (krvdev/krsdev em devnet), evitando enviar para a rede errada.
+// Addresses (Bech32m).
+//   transparent:  krv1...  data = [0x00] + public key (33)                 — public amounts
+//   private:      krs1...  data = [0x01] + A (33) + B (33)                  — amounts and recipient hidden
+//   view key:     krw1...  data = [0x02] + a (32) + B (33)                  — read-only, for audits
+//   multisig:     krv1…    data = [0x03] + hash of the M-of-N policy (32)   — transparent, requires M signatures
+//   quantum-safe: krq1...  data = [0x04] + hash(Schnorr key ‖ ML-DSA key) (32) — transparent, quantum-resistant
+// The prefix changes per network (krvdev/krsdev on devnet), preventing payments to the wrong network.
 
 import { encode, decode } from './util/bech32m.js';
 import { Point, scalarFromBytes, scalarToBytes } from './crypto/secp256k1.js';
@@ -16,11 +16,11 @@ export const ADDR_VIEWKEY = 0x02;
 export const ADDR_MULTISIG = 0x03;
 export const ADDR_PQ = 0x04;
 
-/** Dados de endereço transparente = trava (lock) de uma saída transparente. */
+/** Transparent address data = lock of a transparent output. */
 export const transparentData = (pubkey) => Buffer.concat([Buffer.from([ADDR_TRANSPARENT]), pubkey.toBytes()]);
 export const shieldedData = (A, B) => Buffer.concat([Buffer.from([ADDR_SHIELDED]), A.toBytes(), B.toBytes()]);
 
-/** Interpreta dados de endereço (também usados no payload da coinbase). Lança erro se inválido. */
+/** Parses address data (also used in the coinbase payload). Throws if invalid. */
 export function parseAddressData(data) {
   data = Buffer.from(data);
   if (data[0] === ADDR_TRANSPARENT && data.length === 34) {
@@ -35,18 +35,18 @@ export function parseAddressData(data) {
   if (data[0] === ADDR_PQ && data.length === 33) {
     return { type: 'q', data, hash: data.subarray(1) };
   }
-  // travas que não são endereços: registro de nome (@nome) e compromisso de nome
+  // locks that are not addresses: name record (@name) and name commitment
   if (data[0] === LOCK_NAME) return { type: 'n', data, record: parseNameRecord(data) };
   if (data[0] === LOCK_NAME_COMMIT && data.length === 33) return { type: 'c', data, hash: data.subarray(1) };
-  throw new Error('dados de endereço inválidos');
+  throw new Error('invalid address data');
 }
 
-/** Texto para exibir uma trava qualquer: o endereço, ou o que ela é (registro/compromisso de nome). */
+/** Text to display any lock: the address, or what it is (name record/commitment). */
 export function describeLock(params, lock) {
   if (lock[0] === LOCK_NAME) {
-    try { return `@${parseNameRecord(lock).name} (registro de nome)`; } catch { return 'registro de nome inválido'; }
+    try { return `@${parseNameRecord(lock).name} (name record)`; } catch { return 'invalid name record'; }
   }
-  if (lock[0] === LOCK_NAME_COMMIT) return 'compromisso de nome (oculto até a revelação)';
+  if (lock[0] === LOCK_NAME_COMMIT) return 'name commitment (hidden until the reveal)';
   return encodeAddress(params, lock);
 }
 
@@ -54,7 +54,7 @@ const HRP_OF = { t: 't', m: 't', s: 's', q: 'q' };
 
 export function encodeAddress(params, data) {
   const t = data[0];
-  if (t === LOCK_NAME || t === LOCK_NAME_COMMIT) throw new Error('esta trava não é um endereço (é um registro de nome)');
+  if (t === LOCK_NAME || t === LOCK_NAME_COMMIT) throw new Error('this lock is not an address (it is a name record)');
   const hrp = t === ADDR_TRANSPARENT || t === ADDR_MULTISIG ? params.hrp.t : t === ADDR_SHIELDED ? params.hrp.s : t === ADDR_PQ ? params.hrp.q : params.hrp.v;
   return encode(hrp, data);
 }
@@ -63,7 +63,7 @@ export function decodeAddress(params, str) {
   const { hrp, bytes } = decode(str.trim());
   const info = parseAddressData(bytes);
   const expected = params.hrp[HRP_OF[info.type]];
-  if (hrp !== expected) throw new Error(`endereço de outra rede ou tipo (prefixo ${hrp}, esperado ${expected})`);
+  if (hrp !== expected) throw new Error(`address of another network or type (prefix ${hrp}, expected ${expected})`);
   return info;
 }
 
@@ -72,6 +72,6 @@ export function encodeViewKey(params, a, B) {
 }
 export function decodeViewKey(params, str) {
   const { hrp, bytes } = decode(str.trim());
-  if (hrp !== params.hrp.v || bytes[0] !== ADDR_VIEWKEY || bytes.length !== 66) throw new Error('chave de visualização inválida');
+  if (hrp !== params.hrp.v || bytes[0] !== ADDR_VIEWKEY || bytes.length !== 66) throw new Error('invalid view key');
   return { a: scalarFromBytes(bytes.subarray(1, 33)), B: Point.fromBytes(bytes.subarray(33)) };
 }

@@ -8,7 +8,7 @@
     "test": "node --test \"test/*.test.js\"",
     "devnet": "node scripts/devnet.js",
     "simulate": "node scripts/simulate.js",
-    "emission": "node src/cli.js emissao --rede mainnet"
+    "emission": "node src/cli.js emission --network mainnet"
   },
   "engines": { "node": ">=22" },
   "license": "MIT",

@@ -1,8 +1,8 @@
-// Transações Bitcoin: serialização (com testemunha segwit, BIP-144), txid, peso/vbytes e o
-// hash de assinatura segwit v0 (BIP-143).
+// Bitcoin transactions: serialization (with segwit witness, BIP-144), txid, weight/vbytes and the
+// segwit v0 signature hash (BIP-143).
 //
-// txid é exibido invertido (como em exploradores e no Bitcoin Core); na serialização o
-// ponto de saída usa a ordem interna.
+// The txid is displayed reversed (as in explorers and Bitcoin Core); in serialization the
+// outpoint uses the internal order.
 
 import { Writer, Reader } from '../util/bytes.js';
 import { hash256 } from './address.js';
@@ -12,7 +12,7 @@ const EMPTY = Buffer.alloc(0);
 
 export class BtcTx {
   /**
-   * inputs:  [{ txid (hex de exibição), vout, sequence, scriptSig?, witness?: Buffer[] }]
+   * inputs:  [{ txid (display hex), vout, sequence, scriptSig?, witness?: Buffer[] }]
    * outputs: [{ value (BigInt, satoshis), script (scriptPubKey) }]
    */
   constructor({ version = 2, inputs = [], outputs = [], locktime = 0 } = {}) {
@@ -79,11 +79,11 @@ export class BtcTx {
   }
 
   /**
-   * Hash de assinatura segwit v0 (BIP-143), só SIGHASH_ALL (o único que a troca usa).
-   * scriptCode: o witnessScript (P2WSH) ou 76a914{hash160}88ac (P2WPKH), sem o prefixo de tamanho.
+   * Segwit v0 signature hash (BIP-143), SIGHASH_ALL only (the only one the swap uses).
+   * scriptCode: the witnessScript (P2WSH) or 76a914{hash160}88ac (P2WPKH), without the length prefix.
    */
   sighashV0(index, scriptCode, amount, hashType = SIGHASH_ALL) {
-    if (hashType !== SIGHASH_ALL) throw new Error('só SIGHASH_ALL é suportado');
+    if (hashType !== SIGHASH_ALL) throw new Error('only SIGHASH_ALL is supported');
     const prevouts = new Writer(), seqs = new Writer(), outs = new Writer();
     for (const i of this.inputs) { prevouts.bytes(Buffer.from(i.txid, 'hex').reverse(), 32); prevouts.u32(i.vout); seqs.u32(i.sequence); }
     for (const o of this.outputs) { outs.u64(o.value); outs.varbytes(o.script); }

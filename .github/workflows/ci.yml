@@ -1,6 +1,6 @@
-# Integração contínua: roda em toda mudança e em todo pull request (gratuito em repositórios
-# públicos do GitHub). Quem contribui vê na hora se quebrou algo.
-name: testes
+# Continuous integration: runs on every change and every pull request (free for public
+# GitHub repositories). Contributors see right away whether something broke.
+name: tests
 
 on:
   push:
@@ -22,15 +22,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: Testes com o núcleo WebAssembly
+      - name: Tests with the WebAssembly core
         run: node --test "test/*.test.js"
-      - name: Testes sem WebAssembly (plano B em JavaScript)
+      - name: Tests without WebAssembly (JavaScript plan B)
         run: node --test "test/*.test.js"
         env:
           KREVO_NO_WASM: "1"
 
   rust:
-    name: Rust (nó krevod e núcleo WebAssembly)
+    name: Rust (krevod node and WebAssembly core)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,26 +41,26 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup target add wasm32-unknown-unknown
-      - name: Testes do nó (vetores do JavaScript, fuzzing, cofre)
+      - name: Node tests (JavaScript vectors, fuzzing, vault)
         run: cd rust/krevod && cargo test --release --locked
-      - name: Medição de tempo constante (nativa; informativa — máquinas compartilhadas têm ruído)
+      - name: Constant-time measurement (native; informational — shared machines are noisy)
         continue-on-error: true
         run: cd rust/krevod && cargo test --release --locked ct_timing -- --ignored --nocapture
-      - name: Provador nativo aceito pelo verificador JavaScript
+      - name: Native prover accepted by the JavaScript verifier
         run: node --test test/fcmp.test.js
         env:
           KREVO_PROVER: rust/krevod/target/release/krevod
-      - name: Núcleo WebAssembly compila
+      - name: WebAssembly core builds
         run: cd rust/krevo-wasm && cargo build --release --locked --target wasm32-unknown-unknown
 
   docker:
-    name: Imagem Docker
+    name: Docker image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Construir
+      - name: Build
         run: docker build -t krevo .
-      - name: Executar
+      - name: Run
         run: |
-          docker run --rm krevo emissao --rede testnet | head -5
-          docker run --rm --entrypoint krevod krevo ajuda
+          docker run --rm krevo emission --network testnet | head -5
+          docker run --rm --entrypoint krevod krevo help

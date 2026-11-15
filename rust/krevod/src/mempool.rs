@@ -1,6 +1,6 @@
-//! Mempool (espelha src/node/mempool.js): transações válidas contra o estado do virtual.
-//! Seleção para blocos por amostragem aleatória ponderada pela taxa (Efraimidis–Spirakis),
-//! para que mineradores paralelos escolham conjuntos diferentes.
+//! Mempool (mirrors src/node/mempool.js): transactions valid against the virtual state.
+//! Selection for blocks by random sampling weighted by fee (Efraimidis–Spirakis),
+//! so that parallel miners pick different sets.
 
 use crate::consensus::Consensus;
 use crate::tx::Transaction;
@@ -34,26 +34,26 @@ impl Mempool {
         (self.rng >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    /// Valida sem inserir (também usado na fase "haste" do Dandelion++).
+    /// Validates without inserting (also used in Dandelion++'s "stem" phase).
     pub fn check(&self, c: &mut Consensus, tx: &Transaction) -> Result<(), String> {
         let id = tx.id();
-        if c.tx_status(&id)["status"] == "accepted" { return Err("transação já confirmada".into()); }
+        if c.tx_status(&id)["status"] == "accepted" { return Err("transaction already confirmed".into()); }
         validate_tx_stateless(tx, &c.params)?;
-        for i in &tx.t_in { if self.spent.contains_key(&(i.txid, i.index)) { return Err("conflito com transação no mempool".into()); } }
-        for si in &tx.s_in { if self.kis.contains_key(&si.key_image) { return Err("imagem de chave já usada no mempool".into()); } }
+        for i in &tx.t_in { if self.spent.contains_key(&(i.txid, i.index)) { return Err("conflict with a transaction in the mempool".into()); } }
+        for si in &tx.s_in { if self.kis.contains_key(&si.key_image) { return Err("key image already used in the mempool".into()); } }
         c.ensure_virtual_base();
         let v = c.virt();
         let r = validate_tx_in_context(tx, &c.virtual_view(), v.gd.daa_score, &c.params)?;
-        if v.acceptance.shielded + shielded_delta(tx, r.t_in) < 0 { return Err("catraca: retiraria do pool privado mais KRV do que existe nele".into()); }
-        if (tx.fee as u128) < tx.mass as u128 * c.params.min_relay_fee_rate as u128 { return Err("taxa abaixo do mínimo de retransmissão".into()); }
+        if v.acceptance.shielded + shielded_delta(tx, r.t_in) < 0 { return Err("turnstile: would withdraw more KRV from the private pool than exists in it".into()); }
+        if (tx.fee as u128) < tx.mass as u128 * c.params.min_relay_fee_rate as u128 { return Err("fee below the minimum relay fee".into()); }
         Ok(())
     }
 
-    /// Insere; devolve (ok, duplicada, motivo).
+    /// Inserts; returns (ok, duplicate, reason).
     pub fn add(&mut self, c: &mut Consensus, tx: Arc<Transaction>) -> (bool, bool, String) {
         let id = tx.id();
         if self.txs.contains_key(&id) { return (true, true, String::new()); }
-        if self.txs.len() >= self.max_size { return (false, false, "mempool cheio".into()); }
+        if self.txs.len() >= self.max_size { return (false, false, "mempool full".into()); }
         if let Err(e) = self.check(c, &tx) { return (false, false, e); }
         for i in &tx.t_in { self.spent.insert((i.txid, i.index), id); }
         for si in &tx.s_in { self.kis.insert(si.key_image, id); }
@@ -72,7 +72,7 @@ impl Mempool {
         self.version += 1;
     }
 
-    /// Depois que o virtual muda: tira o que foi confirmado ou ficou inválido.
+    /// After the virtual changes: removes what was confirmed or became invalid.
     pub fn revalidate(&mut self, c: &mut Consensus) {
         c.ensure_virtual_base();
         let ids: Vec<[u8; 32]> = self.order.clone();

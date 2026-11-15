@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Start here — how to help
+    url: https://github.com/Milkausikopistor/krevo/blob/main/CONTRIBUTING.md
+    about: Where help is needed most, how to run the tests and how to send a pull request.

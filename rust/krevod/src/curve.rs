@@ -1,7 +1,7 @@
-//! Curvas y² = x³ + 7 do ciclo secp256k1 / secq256k1, genéricas sobre o corpo.
-//!   Secp: campo p, ordem n (a curva de sempre)      Secq: campo n, ordem p (a "gêmea")
-//! Coordenadas Jacobianas; multiplicação em janelas de 4 bits; multiexponenciação de
-//! Pippenger com somas mistas (pontos normalizados para afim com uma inversão só).
+//! The y² = x³ + 7 curves of the secp256k1 / secq256k1 cycle, generic over the field.
+//!   Secp: field p, order n (the usual curve)      Secq: field n, order p (the "twin")
+//! Jacobian coordinates; multiplication in 4-bit windows; Pippenger multi-exponentiation
+//! with mixed additions (points normalized to affine with a single inversion).
 
 use crate::field::*;
 use std::fmt::Debug;
@@ -102,7 +102,7 @@ impl<C: Curve> Pt<C> {
     pub fn neg(&self) -> Self { Pt { x: self.x, y: -self.y, z: self.z } }
     pub fn sub(&self, q: &Self) -> Self { self.add(&q.neg()) }
 
-    /// k·P com k inteiro canônico (limbs).
+    /// k·P with a canonical integer k (limbs).
     pub fn mul_limbs(&self, k: &[u64; 4]) -> Self {
         if self.is_inf() || *k == [0; 4] { return Pt::inf(); }
         let mut tbl = [Pt::inf(); 16];
@@ -127,7 +127,7 @@ impl<C: Curve> Pt<C> {
         self.x * z2z2 == q.x * z1z1 && self.y * q.z * z2z2 == q.y * self.z * z1z1
     }
 
-    /// 33 bytes comprimidos; o infinito vira 33 zeros (como no JavaScript).
+    /// 33 compressed bytes; infinity becomes 33 zeros (as in JavaScript).
     pub fn to_bytes(&self) -> [u8; 33] {
         let mut out = [0u8; 33];
         if let Some((x, y)) = self.affine() {
@@ -142,13 +142,13 @@ impl<C: Curve> Pt<C> {
         if y.is_odd() != odd { y = -y; }
         Some(Pt::from_affine(x, y))
     }
-    /// Decodifica 33 bytes; rejeita o infinito, x ≥ campo e pontos fora da curva.
+    /// Decodes 33 bytes; rejects infinity, x ≥ field and points not on the curve.
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         if b.len() != 33 || (b[0] != 2 && b[0] != 3) { return None; }
         let x = Fe::from_be_bytes(&b[1..])?;
         Self::lift_x(x, b[0] == 3)
     }
-    /// Tenta-e-incrementa: `h(ctr)` dá 32 bytes; x = inteiro big-endian; y par.
+    /// Try-and-increment: `h(ctr)` gives 32 bytes; x = big-endian integer; even y.
     pub fn hash_to_point(h: impl Fn(u32) -> [u8; 32]) -> Self {
         for ctr in 0..1000u32 {
             let b = h(ctr);
@@ -156,11 +156,11 @@ impl<C: Curve> Pt<C> {
                 if let Some(p) = Self::lift_x(x, false) { return p; }
             }
         }
-        panic!("hash_to_point falhou");
+        panic!("hash_to_point failed");
     }
 }
 
-/// Normaliza vários pontos para afim com uma única inversão.
+/// Normalizes several points to affine with a single inversion.
 pub fn batch_affine<C: Curve>(ps: &[Pt<C>]) -> Vec<Option<(Base<C>, Base<C>)>> {
     let mut zs: Vec<Base<C>> = ps.iter().map(|p| p.z).collect();
     batch_invert(&mut zs);
@@ -224,7 +224,7 @@ fn pippenger<C: Curve>(ks: &[[u64; 4]], ps: &[Pt<C>]) -> Pt<C> {
     acc
 }
 
-/// Tabela de base fixa (janelas de 4 bits, 64 × 15 pontos afins).
+/// Fixed-base table (4-bit windows, 64 × 15 affine points).
 pub struct FixedBase<C: Curve> { tbl: Vec<[(Base<C>, Base<C>); 15]> }
 
 impl<C: Curve> FixedBase<C> {
@@ -241,7 +241,7 @@ impl<C: Curve> FixedBase<C> {
         let mut tbl = Vec::with_capacity(64);
         for i in 0..64 {
             let mut row = [(Fe::ZERO, Fe::ZERO); 15];
-            for j in 0..15 { row[j] = aff[i * 15 + j].expect("tabela degenerada"); }
+            for j in 0..15 { row[j] = aff[i * 15 + j].expect("degenerate table"); }
             tbl.push(row);
         }
         FixedBase { tbl }
@@ -264,14 +264,14 @@ mod tests {
 
     #[test]
     fn cycle_and_msm() {
-        let g2 = P2::hash_to_point(|c| H::new("teste").b(&c.to_le_bytes()).d32());
-        let p_as_scalar_minus1 = Fe::<ModP>::ZERO - Fe::<ModP>::ONE; // ordem de secq = p
+        let g2 = P2::hash_to_point(|c| H::new("test").b(&c.to_le_bytes()).d32());
+        let p_as_scalar_minus1 = Fe::<ModP>::ZERO - Fe::<ModP>::ONE; // order of secq = p
         // (p−1)·G + G = O
         assert!(g2.mul(&p_as_scalar_minus1).add(&g2).is_inf());
-        let g1 = P1::hash_to_point(|c| H::new("teste").b(&c.to_le_bytes()).d32());
+        let g1 = P1::hash_to_point(|c| H::new("test").b(&c.to_le_bytes()).d32());
         let n_minus1 = Fe::<ModN>::ZERO - Fe::<ModN>::ONE;
         assert!(g1.mul(&n_minus1).add(&g1).is_inf());
-        // msm == soma ingênua
+        // msm == naive sum
         let pts: Vec<P1> = (0..300u64).map(|i| g1.mul(&Fe::from_u64(i * 7919 + 1))).collect();
         let ks: Vec<Fe<ModN>> = (0..300u64).map(|i| Fe::from_u64(i * i + 11).invert()).collect();
         let mut naive = P1::inf();

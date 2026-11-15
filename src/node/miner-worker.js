@@ -1,9 +1,9 @@
-// Thread de mineração: procura nonces cujo hash fica abaixo do alvo do trabalho.
-// O mesmo código serve à mineração solo (alvo = alvo do bloco) e ao pool
-// (alvo = alvo de "share", mais fácil: mede o esforço de cada minerador).
+// Mining thread: looks for nonces whose hash falls below the job's target.
+// The same code serves solo mining (target = block target) and the pool
+// (target = "share" target, easier: measures each miner's effort).
 //
-//   recebe: { type:'job', jobId, prePowHash, timestamp, target (32 bytes LE, hex) } | { type:'pause' } | { type:'stop' }
-//   envia:  { type:'share', jobId, nonce, timestamp } | { type:'hashes', n }
+//   receives: { type:'job', jobId, prePowHash, timestamp, target (32 bytes LE, hex) } | { type:'pause' } | { type:'stop' }
+//   sends:    { type:'share', jobId, nonce, timestamp } | { type:'hashes', n }
 import { parentPort } from 'node:worker_threads';
 import { randomBytes } from 'node:crypto';
 import { PowState, hashMeetsTarget } from '../consensus/pow.js';
@@ -19,7 +19,7 @@ parentPort.on('message', (m) => {
 function loop() {
   if (!job) { setTimeout(loop, 20); return; }
   if (!cur || cur.seq !== seq) {
-    const samePow = cur && cur.prePowHash === job.prePowHash; // só mudou o alvo (vardiff): reaproveita a matriz
+    const samePow = cur && cur.prePowHash === job.prePowHash; // only the target changed (vardiff): reuse the matrix
     cur = {
       seq, jobId: job.jobId, prePowHash: job.prePowHash, minTs: job.timestamp,
       pow: samePow ? cur.pow : new PowState(Buffer.from(job.prePowHash, 'hex')),

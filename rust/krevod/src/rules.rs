@@ -1,6 +1,6 @@
-//! Regras auxiliares de consenso: emissão, massa, políticas de gasto (multiassinatura,
-//! herança, travas de hash), endereço quântico, nomes e dados de endereço.
-//! Espelha emission.js, mass.js, policy.js, pqlock.js, names.js e address.js.
+//! Auxiliary consensus rules: emission, mass, spending policies (multisig,
+//! inheritance, hash locks), quantum-safe address, names and address data.
+//! Mirrors emission.js, mass.js, policy.js, pqlock.js, names.js and address.js.
 
 use crate::bytes::Reader;
 use crate::crypto::{mldsa_verify, schnorr_verify, MLDSA_PUB_SIZE, MLDSA_SIG_SIZE};
@@ -12,7 +12,7 @@ use num_bigint::BigUint;
 use num_traits::{One, ToPrimitive};
 use std::sync::OnceLock;
 
-// ======================================================================== emissão
+// ======================================================================== emission
 fn iroot(x: &BigUint, k: u32) -> BigUint {
     if *x < BigUint::from(2u32) { return x.clone(); }
     let kb = BigUint::from(k);
@@ -30,7 +30,7 @@ fn iroot(x: &BigUint, k: u32) -> BigUint {
 
 fn factor_table(steps: u64) -> &'static Vec<u128> {
     static T: OnceLock<Vec<u128>> = OnceLock::new();
-    assert_eq!(steps, 48, "tabela de emissão só para 48 passos");
+    assert_eq!(steps, 48, "emission table only for 48 steps");
     T.get_or_init(|| (0..steps).map(|j| {
         let x = BigUint::one() << ((64 * steps - j) as usize);
         iroot(&x, steps as u32).to_u128().unwrap()
@@ -56,7 +56,7 @@ pub fn capped_subsidy(daa: u64, minted: u64, p: &Params) -> u64 {
     s.min(room)
 }
 
-// ======================================================================== políticas
+// ======================================================================== policies
 pub const LOCK_MULTISIG: u8 = 0x03;
 pub const LOCK_PQ: u8 = 0x04;
 pub const LOCK_NAME: u8 = 0x05;
@@ -175,7 +175,7 @@ pub fn verify_pq_witness(lock: &[u8], w: &[u8], msg: &[u8]) -> bool {
     schnorr_verify(&p, msg, s_sig, "sig") && mldsa_verify(q_pub, msg, q_sig)
 }
 
-// ======================================================================== nomes
+// ======================================================================== names
 pub fn is_valid_name(n: &[u8]) -> bool {
     if n.len() < 3 || n.len() > 32 { return false; }
     let ok = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit();
@@ -231,7 +231,7 @@ pub fn parse_commit_witness(w: &[u8]) -> Option<CommitWitness> {
     Some(CommitWitness { name: String::from_utf8(name.to_vec()).ok()?, salt, owner, inner })
 }
 
-// ======================================================================== massa
+// ======================================================================== mass
 fn sig_count(w: &[u8]) -> u64 {
     if w.len() == 64 { return 1; }
     if is_pq_witness(w) { return 2; }
@@ -270,7 +270,7 @@ pub fn storage_mass(tx: &Transaction, input_amounts: &[u64], p: &Params) -> u64 
     if m > MAX_SAFE as u128 { MAX_SAFE } else { m as u64 }
 }
 
-// ======================================================================== endereços
+// ======================================================================== addresses
 pub enum Addr {
     T { data: Vec<u8>, pubkey: P1 },
     S { data: Vec<u8>, a: P1, b: P1 },
@@ -365,17 +365,17 @@ pub fn encode_address(p: &Params, data: &[u8]) -> Option<String> {
     Some(bech32m_encode(hrp, data))
 }
 pub fn decode_address(p: &Params, s: &str) -> Result<Addr, String> {
-    let (hrp, bytes) = bech32m_decode(s.trim()).ok_or("endereço inválido")?;
-    let a = parse_address_data(&bytes).ok_or("dados de endereço inválidos")?;
+    let (hrp, bytes) = bech32m_decode(s.trim()).ok_or("invalid address")?;
+    let a = parse_address_data(&bytes).ok_or("invalid address data")?;
     let expected = match a.kind() { 't' | 'm' => p.hrp.t, 's' => p.hrp.s, 'q' => p.hrp.q, _ => "" };
-    if hrp != expected { return Err(format!("endereço de outra rede ou tipo (prefixo {hrp}, esperado {expected})")); }
+    if hrp != expected { return Err(format!("address of another network or type (prefix {hrp}, expected {expected})")); }
     Ok(a)
 }
-/// Texto para exibir uma trava: o endereço, ou o que ela é.
+/// Text to display a lock: the address, or what it is.
 pub fn describe_lock(p: &Params, lock: &[u8]) -> String {
     match lock.first() {
-        Some(&LOCK_NAME) => match parse_name_record(lock) { Some(r) => format!("@{} (registro de nome)", r.name), None => "registro de nome inválido".into() },
-        Some(&LOCK_NAME_COMMIT) => "compromisso de nome (oculto até a revelação)".into(),
+        Some(&LOCK_NAME) => match parse_name_record(lock) { Some(r) => format!("@{} (name record)", r.name), None => "invalid name record".into() },
+        Some(&LOCK_NAME_COMMIT) => "name commitment (hidden until the reveal)".into(),
         _ => encode_address(p, lock).unwrap_or_default(),
     }
 }

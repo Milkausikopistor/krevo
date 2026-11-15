@@ -1,5 +1,5 @@
-// Ganchos de módulo que imitam o NAVEGADOR dentro do Node: o código do projeto que pedir
-// "node:crypto" ou "node:fs" recebe as mesmas versões do app web (src/web/shims/).
+// Module hooks that imitate the BROWSER inside Node: project code that asks for
+// "node:crypto" or "node:fs" gets the same versions as the web app (src/web/shims/).
 const SHIM = {
   'node:crypto': new URL('../../src/web/shims/crypto.js', import.meta.url).href,
   'node:fs': new URL('../../src/web/shims/fs.js', import.meta.url).href,

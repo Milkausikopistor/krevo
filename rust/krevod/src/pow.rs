@@ -1,7 +1,7 @@
-//! KrevoHash e alvos compactos (espelha src/consensus/pow.js).
+//! KrevoHash and compact targets (mirrors src/consensus/pow.js).
 //!   h1 = BLAKE2b("KRV/KrevoHash/1" ‖ prePow ‖ timestamp ‖ nonce)
-//!   p_i = (Σ_j M[i][j]·v_j) >> 10 com a matriz 64×64 gerada do prePow
-//!   h2 = BLAKE2b("KRV/KrevoHash/2" ‖ h1 XOR p)   — válido se h2 (LE) ≤ alvo
+//!   p_i = (Σ_j M[i][j]·v_j) >> 10 with the 64×64 matrix generated from prePow
+//!   h2 = BLAKE2b("KRV/KrevoHash/2" ‖ h1 XOR p)   — valid if h2 (LE) ≤ target
 
 use crate::block::Header;
 use crate::hash::blake2b512;
@@ -9,7 +9,7 @@ use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
 pub fn compact_to_target(bits: u32) -> Result<BigUint, String> {
-    if bits & 0x0080_0000 != 0 { return Err("alvo negativo".into()); }
+    if bits & 0x0080_0000 != 0 { return Err("negative target".into()); }
     let exp = bits >> 24;
     let mant = BigUint::from(bits & 0x007f_ffff);
     Ok(if exp <= 3 { mant >> (8 * (3 - exp)) } else { mant << (8 * (exp - 3)) })
