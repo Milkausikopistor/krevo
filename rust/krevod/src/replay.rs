@@ -40,7 +40,7 @@ pub fn summary(c: &mut Consensus) -> serde_json::Value {
 }
 
 pub fn run(params: Params, file: &std::path::Path) -> serde_json::Value {
-    let bf = BlockFile { file: file.to_path_buf() };
+    let bf = BlockFile { file: file.to_path_buf(), dir: file.parent().map(|p| p.to_path_buf()).unwrap_or_default() };
     let blocks = bf.read_all();
     let mut c = Consensus::new(params);
     let t = std::time::Instant::now();

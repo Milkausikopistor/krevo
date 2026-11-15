@@ -267,6 +267,21 @@ impl MuHash {
         le.resize(384, 0);
         H::new("muhash/final").b(&le).d32()
     }
+    /// Internal state (numerator ‖ denominator, 384 bytes each, little-endian) — for state snapshots.
+    pub fn to_state(&self) -> Vec<u8> {
+        let (mut n, mut d) = (self.num.to_bytes_le(), self.den.to_bytes_le());
+        n.resize(384, 0);
+        d.resize(384, 0);
+        n.extend_from_slice(&d);
+        n
+    }
+    pub fn from_state(b: &[u8]) -> Option<Self> {
+        if b.len() != 768 { return None; }
+        let (num, den) = (BigUint::from_bytes_le(&b[..384]), BigUint::from_bytes_le(&b[384..]));
+        let mp = muhash_prime();
+        if &num >= mp || &den >= mp || den == BigUint::from(0u32) { return None; }
+        Some(MuHash { num, den })
+    }
 }
 
 // ------------------------------------------------------------------ stealth output (coinbase)

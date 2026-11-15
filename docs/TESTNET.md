@@ -67,6 +67,8 @@ Requirements: Node.js **24.7+** (tested on 26); for the Rust node, a stable Rust
 # node — JavaScript (reference) or Rust (faster); both speak the same protocol
 node src/cli.js node --network testnet --datadir ./data
 cd rust/krevod && cargo build --release && ./target/release/krevod node --network testnet --datadir ./data
+#   add --prune to keep only the last ~3 hours of history (bounded disk and memory; such a node cannot
+#   serve old blocks to new nodes, so the network also needs some archival nodes — the default)
 
 # the rest talks to the node's RPC (default http://127.0.0.1:16211)
 node src/cli.js wallet create --network testnet                       # asks for nothing; add --password to encrypt
@@ -90,16 +92,21 @@ other. Please only list nodes you intend to keep online.
 These are the main obstacles to a **long-running** testnet. They are good projects for contributors
 (see `CONTRIBUTING.md`):
 
-1. **Storage and restart time (top priority).** Both nodes keep every block in one append-only file
-   and **re-validate the whole chain at start-up**. Measured on the development machine: ~355 bytes per
-   block, i.e. **~300 MB per day** at 10 blocks/s; the Rust node re-validates ~1,370 blocks/s, so each
-   day of chain adds **~10 minutes** to a restart (the JavaScript node is ~6× slower). Needed: a
-   key-value database with periodic state snapshots (restart from the last snapshot), body pruning,
-   pruning proofs and snapshot sync for new nodes (whitepaper §9, item 3).
-2. **Memory.** The block index lives in RAM in both nodes and grows with the chain.
+1. **Storage and restart time (top priority).** Blocks take ~355 bytes each on disk, i.e. **~300 MB
+   per day** at 10 blocks/s. The **Rust node** restarts from a state snapshot (`state.snap`, written
+   every 6,000 new blocks or a quarter of what it keeps) and validates only the newer blocks; with
+   `--prune` it also keeps disk and memory bounded (see the Rust node section of the README for the
+   trade-offs). The **JavaScript node** still keeps every block and re-validates the whole chain at
+   start-up (~230 blocks/s, so each day of chain adds about an hour to its restart). Still needed:
+   snapshot sync for new nodes with pruning proofs, so that they do not depend on archival peers
+   (whitepaper §9, item 3), and a key-value database (the snapshot is rewritten whole, ~1.6 KB per
+   kept block).
+2. **Memory.** The block index lives in RAM in both nodes and grows with the chain (a pruned Rust node
+   keeps only its recent window).
 3. **Peer management.** Discovery is a plain `getaddr/addr` exchange plus the seed list; there is no
    DNS seeding, peer scoring beyond simple misbehaviour bans, or eclipse-attack protection.
-4. **Releases.** CI tests every change but does not publish binaries or images yet.
+4. **Releases.** A version tag makes CI publish `krevod` binaries (Linux, macOS, Windows), the
+   project package and a Docker image (`ghcr.io/<owner>/krevo`); the binaries are not code-signed yet.
 5. **Mobile.** The web wallet installs as an app (PWA); native packaging (Android/iOS) is not done.
 6. **Independent audit** of the cryptography and consensus — see `docs/SECURITY.md`.
 

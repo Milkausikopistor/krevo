@@ -5,6 +5,7 @@
 //! light server and explorer work with it unchanged.
 //!
 //!   krevod node    --network devnet [--datadir DIR] [--port N] [--rpcport N] [--peer host:port]… [--no-seeds]
+//!                  [--prune [--prune-depth N]]   (keep only recent history: see Consensus::prune)
 //!   krevod replay  --network devnet --file DIR/devnet/blocks.dat
 //!   krevod prove   [--check]   (native FCMP prover for the wallets: JSON in and out)
 //!
@@ -28,6 +29,7 @@ pub mod provecmd;
 pub mod replay;
 pub mod rpc;
 pub mod rules;
+pub mod snapshot;
 pub mod storage;
 pub mod tx;
 pub mod txvalidation;
@@ -38,6 +40,8 @@ pub mod wallet_ops;
 mod ct_timing_test;
 #[cfg(test)]
 mod hostile_test;
+#[cfg(test)]
+mod snapshot_test;
 #[cfg(test)]
 mod vectors_test;
 
@@ -102,7 +106,15 @@ fn main() {
             if args.get("no-seeds").is_none() {
                 for s in params::seeds(params.name) { if !peers.contains(&s) { peers.push(s); } }
             }
-            let n = node::Node::new(params, Some(storage), port, rpc_host, rpc_port);
+            let mut n = node::Node::new(params, Some(storage), port, rpc_host, rpc_port);
+            if args.get("prune").is_some() || args.get("prune-depth").is_some() {
+                // default: about 3 hours of blocks; the minimum keeps far more than any window needs
+                let d = match args.get("prune-depth") { Some(x) => x.parse::<u64>().unwrap_or(0), None => n.params.bps * 3 * 3600 };
+                let min = n.c.min_prune_depth();
+                if d < min { eprintln!("--prune-depth must be at least {min} (blue score)"); std::process::exit(1) }
+                n.prune_depth = Some(d);
+                node::log(&format!("pruning on: history more than {d} blue score old is dropped (this node cannot serve it to new nodes)"));
+            }
             let shared: node::Shared = std::sync::Arc::new((std::sync::Mutex::new(n), std::sync::Condvar::new()));
             let sh = shared.clone();
             std::thread::spawn(move || {
@@ -120,7 +132,7 @@ fn main() {
             if let Err(e) = node::run(shared, peers) { eprintln!("error: {e}"); std::process::exit(1); }
         }
         _ => {
-            eprintln!("krevod — Krevo node in Rust\n  krevod node --network devnet [--datadir DIR] [--port N] [--rpcport N] [--peer host:port] [--no-seeds]\n  krevod replay --network devnet --file blocks.dat\n  krevod prove [--check]");
+            eprintln!("krevod — Krevo node in Rust\n  krevod node --network devnet [--datadir DIR] [--port N] [--rpcport N] [--peer host:port] [--no-seeds] [--prune [--prune-depth N]]\n  krevod replay --network devnet --file blocks.dat\n  krevod prove [--check]");
         }
     }
 }

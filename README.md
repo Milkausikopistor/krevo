@@ -42,8 +42,9 @@ to take it from here — the next steps need volunteers:
 - **Run the public testnet.** It is already defined in the code (`--network testnet`); it starts
   when someone runs a node. Docker, a step-by-step guide and a faucet are ready:
   **[docs/TESTNET.md](docs/TESTNET.md)**.
-- **Build what a long-running network needs** — above all, storage with state snapshots and pruning
-  in the Rust node (today a restart re-validates the whole chain).
+- **Build what a long-running network needs** — the Rust node now restarts from state snapshots and
+  can prune its history; still missing are snapshot sync for new nodes (with pruning proofs) and an
+  on-disk database in place of the in-memory block index.
 - **Review and audit** the cryptography and consensus: **[docs/SECURITY.md](docs/SECURITY.md)**.
 - **Wallets and apps** — mobile packaging, hardware wallets, more translations of the web wallet.
 
@@ -108,6 +109,7 @@ node src/cli.js mine --address krvdev1… --rpc http://127.0.0.1:16321
 node src/cli.js wallet send --to krsdev1… --amount 2 --from private --rpc http://127.0.0.1:16321
 node src/cli.js light-server --rpc http://127.0.0.1:16321      # and the explorer: explorer --rpc …
 ./target/release/krevod replay --network devnet --file ./data/devnet/blocks.dat   # re-validate a block file
+./target/release/krevod node --network testnet --prune     # keep only recent history (bounded disk and memory)
 ```
 * **What is inside:** its own Montgomery arithmetic for both curves of the secp256k1/secq256k1 cycle,
   GHOSTDAG and the difficulty adjustment, KrevoHash, emission, mass, the UTXO state with MuHash
@@ -132,10 +134,31 @@ node src/cli.js light-server --rpc http://127.0.0.1:16321      # and the explore
     the JavaScript node), CLI wallets sending transparent, shielding and full-chain private payments
     through the Rust node's RPC, a light wallet through a light server on top of it — and both nodes
     ending with exactly the same state (760 blocks, nothing rejected);
-  * restart from its own block file, the JavaScript node re-validating a file written by the Rust node,
-    and the block explorer running on top of it (`vectors/restart.mjs`).
+  * restart from its own block file and then from its state snapshot, the JavaScript node re-validating
+    a file written by the Rust node, and the block explorer running on top of it (`vectors/restart.mjs`).
 * **Speed** (same machine): re-validating the 1,051-block devnet chain takes 1.8 s (JavaScript: 11 s);
   the 28 test chains 4.0 s (21.6 s); verifying one full-chain membership proof ~0.13–0.19 s (~1 s).
+  Restarting from the state snapshot: 0.11 s for 3,000 blocks against 1.9 s of full re-validation
+  (coinbase-only blocks; with real transactions the gap is wider).
+* **Restarts and disk** (`src/snapshot.rs`, tests in `src/snapshot_test.rs`):
+  * **State snapshots.** The node writes `state.snap` next to `blocks.dat` (every 6,000 new blocks, or
+    a quarter of what it keeps if more): the DAG data, the UTXO diffs, the UTXO set and the indexes —
+    everything but the block bodies. On start-up it loads it, re-attaches the bodies from `blocks.dat`
+    without validating them again, and validates only the newer blocks. The file has a checksum and
+    its UTXO set must re-commit (MuHash) to the commitment the chain itself carries; a damaged or
+    stale snapshot is ignored and the node falls back to full re-validation. `blocks.dat` keeps its
+    format, so the JavaScript node can still read an archival Rust node's folder.
+  * **Pruning (optional, `--prune [--prune-depth N]`).** The node picks a *pruning point* on its
+    selected chain N blue score below the tip (default: 3 hours of blocks; at least twice the deepest
+    validation window), drops the block bodies below it and forgets everything further down, then
+    compacts `blocks.dat`. Tests check, block by block through parallel blocks, reorganizations, red
+    blocks and snapshot reloads, that a pruned engine validates every new block exactly like an
+    archival one. Trade-offs, as with a pruned Bitcoin node: it **cannot serve old blocks** (new nodes
+    still sync from archival peers — snapshot sync is future work), it **never follows a chain that
+    forks off below its pruning point** (local finality), and its folder is no longer readable by the
+    JavaScript node.
+  * Size: the snapshot holds ~1.6 KB per kept block (mostly each chain block's MuHash state), the same
+    data the engine keeps in memory; pruning bounds both.
 * **Native prover for wallets:** `krevod prove` computes the two circuit Bulletproofs of each
   private input — the expensive part of a full-chain proof — one thread per half. The JavaScript
   wallets use it automatically when the binary exists (`rust/krevod/target/release` or `…/debug`, or
@@ -145,8 +168,8 @@ node src/cli.js light-server --rpc http://127.0.0.1:16321      # and the explore
   private payment proved in **1.7 s** (9.2 s in JavaScript), a light-wallet payment with two inputs in
   **2.0 s** (11.7 s). The JavaScript verifier accepts the native proofs (a test checks depths 1–3).
 * **Limits:** it is a node and a prover — wallets, miners, the light server and the
-  explorer remain JavaScript programs that use it; storage is the same simple append-only file with full
-  re-validation at start-up; verification of public data uses fast variable-time arithmetic (the node
+  explorer remain JavaScript programs that use it; the block index lives in memory and the state
+  snapshot is rewritten whole (no key-value database yet); verification of public data uses fast variable-time arithmetic (the node
   holds no secret keys — wallet operations use the constant-time code below); equivalence was checked on
   every chain above, not proven; hostile inputs are fuzz-tested (next section); not audited.
 

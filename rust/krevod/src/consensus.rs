@@ -91,7 +91,16 @@ pub struct Consensus {
     pub reds_count: u64,
     /// disqualified blocks (hash, reason) since the last query — for the node's log
     pub disqualified: Vec<(Hash, String)>,
+    /// Pruning (optional node policy, see `prune`): the pruning point, below which this node no
+    /// longer follows reorganizations, and the blue score under which it forgot everything.
+    pub pruning_point: Option<Hash>,
+    pub prune_cutoff: u64,
+    /// "The pruning point is on this block's selected chain" (always true before any pruning).
+    pub chain_ok: HashMap<Hash, bool>,
 }
+
+/// What `prune` did.
+pub struct PruneReport { pub pruning_point: Hash, pub forgotten: usize, pub bodies_dropped: usize }
 
 pub fn coinbase_payload(blue_score: u64, miner_data: &[u8], extra: &[u8]) -> Vec<u8> {
     let mut w = Writer::new();
@@ -154,7 +163,9 @@ impl Consensus {
             tx_index: HashMap::new(), tx_block: HashMap::new(), lock_txs: HashMap::new(), reward_index: HashMap::new(),
             order: vec![], pow_limit_bits: params.genesis_bits, virt: None, virtual_version: 0, genesis_hash: h,
             blocks_count: 0, reds_count: 0, disqualified: vec![], params,
+            pruning_point: None, prune_cutoff: 0, chain_ok: HashMap::new(),
         };
+        c.chain_ok.insert(h, true);
         c.headers.insert(h, g.header.clone());
         c.miner_data.insert(h, vec![]);
         c.store.add(h, vec![], genesis_ghostdag(), calc_work(g.header.bits));
@@ -182,6 +193,8 @@ impl Consensus {
         let h = &block.header;
         let mut missing: Vec<Hash> = vec![];
         for p in &h.parents { if !self.store.has(p) && !missing.contains(p) { missing.push(*p); } }
+        // a pruned node already forgot everything this far down: nothing to fetch or validate
+        if !missing.is_empty() && self.pruning_point.is_some() && h.blue_score < self.prune_cutoff { return AddResult::Known(hash); }
         if !missing.is_empty() { return AddResult::Orphan { hash, missing }; }
         if !trusted && h.timestamp > now + self.params.max_future_ms { return AddResult::Future(hash); }
         let res = self.validate_header(&block).and_then(|gd| self.validate_body(&block).map(|md| (gd, md)));
@@ -198,6 +211,8 @@ impl Consensus {
         self.miner_data.insert(hash, md);
         self.blocks_count += 1;
         self.reds_count += gd.mergeset_reds.len() as u64;
+        let sp = gd.selected_parent.unwrap();
+        self.chain_ok.insert(hash, self.pruning_point == Some(hash) || self.chain_ok.get(&sp).copied().unwrap_or(false));
         self.store.add(hash, parents.clone(), gd, calc_work(h.bits));
         for p in &parents { self.tips.remove(p); }
         self.tips.insert(hash);
@@ -271,6 +286,13 @@ impl Consensus {
         let gd = self.store.gd[hash].clone();
         let sp = gd.selected_parent.unwrap();
         if self.status.get(&sp) != Some(&Status::Chain) { self.status.insert(*hash, Status::Disq); return false; }
+        if !self.chain_ok.get(hash).copied().unwrap_or(false) {
+            // finality of a pruned node: its state below the pruning point is gone, so it cannot follow
+            // a chain that forks off below it (the same trade-off as a pruned Bitcoin node)
+            self.status.insert(*hash, Status::Disq);
+            self.disqualified.push((*hash, "forks off below the pruning point".to_string()));
+            return false;
+        }
         let parents = self.store.parents[hash].clone();
         let reuse = self.virt.as_ref().map(|v| v.parents == parents).unwrap_or(false);
         let mut res = if reuse {
@@ -512,7 +534,7 @@ impl Consensus {
 
     pub fn find_tx(&self, txid: &[u8; 32]) -> Option<&Transaction> {
         let h = self.tx_block.get(txid)?;
-        self.blocks[h].txs.iter().find(|t| t.id() == *txid)
+        self.blocks.get(h)?.txs.iter().find(|t| t.id() == *txid)
     }
 
     /// Transparent coins of a lock in the virtual's state.
@@ -528,9 +550,109 @@ impl Consensus {
         let mut h = self.virt().gd.selected_parent;
         while let Some(x) = h {
             if out.len() >= limit { break; }
+            let Some(g) = self.store.gd.get(&x) else { break }; // (forgotten by pruning)
             out.push(x);
-            h = self.store.gd[&x].selected_parent;
+            h = g.selected_parent;
         }
         out
+    }
+
+    // ----------------------------------------------------------- pruning
+    /// How far below the pruning point the DAG data must be kept: the difficulty and median-time
+    /// windows, the merge depth and the GHOSTDAG walks of new blocks never reach further down.
+    pub fn prune_margin(&self) -> u64 {
+        let p = &self.params;
+        p.merge_depth + p.daa_window_size as u64 + p.past_median_time_window as u64 + 4 * p.ghostdag_k as u64 + 100
+    }
+    /// Smallest pruning depth accepted (blue score between the virtual and the pruning point): twice
+    /// the deepest window a new block's validation looks into, so it never reaches the pruning point
+    /// (the margin below it is a further cushion, e.g. for side blocks that fork off near it).
+    pub fn min_prune_depth(&self) -> u64 {
+        let p = &self.params;
+        2 * p.merge_depth.max(p.daa_window_size as u64).max(p.past_median_time_window as u64).max(100)
+    }
+
+    /// Pruning (optional node policy). The pruning point PP is the selected-chain block about
+    /// `depth` blue score below the virtual. Afterwards this node:
+    ///  • never adopts a chain that forks off below PP (finality: its state down there is gone);
+    ///  • drops the bodies of the blocks in the past of PP (no future block can merge them), and the
+    ///    UTXO diffs below PP (no reorganization can reach them) — PP keeps its body and totals;
+    ///  • forgets every trace of the blocks more than `prune_margin()` blue score below PP.
+    /// What it keeps is enough to validate every new block exactly as an archival node does.
+    pub fn prune(&mut self, depth: u64) -> Option<PruneReport> {
+        let vsp = self.virt().gd.selected_parent?;
+        let vbs = self.store.gd[&vsp].blue_score;
+        if vbs < depth { return None; }
+        let target = vbs - depth;
+        let mut pp = vsp;
+        while self.store.gd[&pp].blue_score > target {
+            match self.store.gd[&pp].selected_parent { Some(sp) if self.store.has(&sp) => pp = sp, _ => break }
+        }
+        let pp_bs = self.store.gd[&pp].blue_score;
+        if let Some(old) = self.pruning_point { if pp == old || pp_bs <= self.store.gd.get(&old).map(|g| g.blue_score).unwrap_or(0) { return None; } }
+        let cutoff = pp_bs.saturating_sub(self.prune_margin());
+        self.ensure_virtual_base(); // the materialized state stays above PP
+        // the past of PP (within what is kept): these bodies can never be merged again
+        let mut past: HashSet<Hash> = HashSet::from([pp]);
+        let mut stack = vec![pp];
+        while let Some(x) = stack.pop() {
+            for p in self.store.parents.get(&x).cloned().unwrap_or_default() {
+                if self.store.gd.get(&p).map(|g| g.blue_score >= cutoff).unwrap_or(false) && past.insert(p) { stack.push(p); }
+            }
+        }
+        let forget: HashSet<Hash> = self.order.iter().filter(|h| **h != pp && self.store.gd[*h].blue_score < cutoff).copied().collect();
+        let drop_tx_index = |c: &mut Self, b: &Block, h: &Hash| {
+            for tx in &b.txs { let id = tx.id(); if c.tx_block.get(&id) == Some(h) { c.tx_block.remove(&id); } }
+        };
+        let mut bodies = 0;
+        for h in &forget {
+            if let Some(b) = self.blocks.remove(h) { drop_tx_index(self, &b, h); bodies += 1; }
+            self.acc.remove(h);
+            self.headers.remove(h); self.miner_data.remove(h); self.status.remove(h); self.chain_ok.remove(h); self.tips.remove(h);
+            self.store.parents.remove(h); self.store.children.remove(h); self.store.height.remove(h);
+            self.store.gd.remove(h); self.store.work.remove(h);
+        }
+        for h in &past {
+            if *h == pp { continue; }
+            if let Some(b) = self.blocks.remove(h) { drop_tx_index(self, &b, h); bodies += 1; }
+        }
+        for h in past.iter() { if let Some(a) = self.acc.get_mut(h) { a.diff = UtxoDiff::default(); } } // no revert below PP
+        for list in self.store.parents.values_mut() { list.retain(|p| !forget.contains(p)); }
+        for list in self.store.children.values_mut() { list.retain(|p| !forget.contains(p)); }
+        self.tx_index.retain(|_, h| !forget.contains(h));
+        self.reward_index.retain(|r, info| !forget.contains(r) && !forget.contains(&info.paid_by));
+        let known: HashSet<[u8; 32]> = self.tx_block.keys().copied().collect();
+        self.lock_txs.retain(|_, ids| { ids.retain(|id| known.contains(id)); !ids.is_empty() });
+        self.order.retain(|h| !forget.contains(h));
+        self.pruning_point = Some(pp);
+        self.prune_cutoff = cutoff;
+        self.recompute_chain_ok();
+        Some(PruneReport { pruning_point: pp, forgotten: forget.len(), bodies_dropped: bodies })
+    }
+
+    /// chain_ok for every kept block: does its selected chain pass through the pruning point?
+    pub fn recompute_chain_ok(&mut self) {
+        self.chain_ok.clear();
+        let Some(pp) = self.pruning_point else { for h in &self.order { self.chain_ok.insert(*h, true); } return };
+        for h in self.order.clone() {
+            let ok = h == pp || self.store.gd[&h].selected_parent.and_then(|sp| self.chain_ok.get(&sp).copied()).unwrap_or(false);
+            self.chain_ok.insert(h, ok);
+        }
+    }
+
+    /// Indexes of the transactions in the loaded block bodies (after reading a state snapshot).
+    pub fn rebuild_body_indexes(&mut self) {
+        self.tx_block.clear();
+        self.lock_txs.clear();
+        for h in self.order.clone() {
+            if h == self.genesis_hash { continue; } // (never indexed, as in `new`)
+            let Some(b) = self.blocks.get(&h).cloned() else { continue };
+            for tx in &b.txs {
+                let id = tx.id();
+                if self.tx_block.contains_key(&id) { continue; }
+                self.tx_block.insert(id, h);
+                self.index_locks(tx, id);
+            }
+        }
     }
 }

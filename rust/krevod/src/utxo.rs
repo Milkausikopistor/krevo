@@ -65,6 +65,8 @@ impl UtxoSet {
             if let Some(v) = self.by_name.get_mut(&n) { vec_remove(v, k); if v.is_empty() { self.by_name.remove(&n); } }
         }
     }
+    /// Inserts a transparent coin with its indexes (loading a state snapshot).
+    pub fn insert_t(&mut self, k: Op, e: TEntry) { self.idx_add(&k, &e); self.t.insert(k, e); }
     pub fn apply(&mut self, d: &UtxoDiff) {
         for (k, e) in &d.rem_t { self.t.remove(k); self.idx_del(k, e); }
         for (k, e) in &d.add_t { self.t.insert(*k, e.clone()); self.idx_add(k, e); }

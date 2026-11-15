@@ -1,7 +1,8 @@
 // Persistence and the explorer on top of the Rust node:
 //  1. the Rust node alone + a JavaScript miner for a few seconds
 //  2. the block explorer (JavaScript) reading the Rust node's RPC
-//  3. restarting the Rust node: it reloads its own block file
+//  3. restarting the Rust node: it reloads its own block file (full validation, then it writes a
+//     state snapshot), and restarting it again: it starts from that snapshot
 //  4. the reference node (JavaScript) reprocesses the file WRITTEN BY RUST and reaches the same state
 //   node rust/krevod/vectors/restart.mjs <krevod.exe>
 import { spawn, execFileSync } from 'node:child_process';
@@ -52,8 +53,21 @@ try {
   await sleep(1000);
   node = start(krevod, nodeArgs);
   const after = await waitFor(() => rpc(B, 'getinfo'), 'Rust node restarted');
-  const same = ['blocks', 'minted', 'shieldedSupply', 'shieldedOutputs'].every((x) => before[x] === after[x]) && before.virtual.selectedParent === after.virtual.selectedParent;
-  console.log(`restart: ${before.blocks} blocks before, ${after.blocks} after — ${same ? 'same state' : 'DIFFERENT'}`);
+  const sameAs = (a, b) => ['blocks', 'minted', 'shieldedSupply', 'shieldedOutputs'].every((x) => a[x] === b[x]) && a.virtual.selectedParent === b.virtual.selectedParent;
+  const snap = path.join(tmp, 'b', 'devnet', 'state.snap');
+  let same = sameAs(before, after);
+  console.log(`restart (full replay of blocks.dat): ${before.blocks} blocks before, ${after.blocks} after — ${same ? 'same state' : 'DIFFERENT'}; state snapshot ${fs.existsSync(snap) ? 'written' : 'MISSING'}`);
+  // a second restart starts from that state snapshot instead of validating everything again
+  node.kill();
+  await sleep(1000);
+  node = spawn(krevod, nodeArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
+  procs.push(node);
+  let log = '';
+  node.stderr.on('data', (d) => { log += d; });
+  const again = await waitFor(() => rpc(B, 'getinfo'), 'Rust node restarted from its snapshot');
+  const fromSnap = log.includes('state snapshot loaded');
+  same = same && fs.existsSync(snap) && fromSnap && sameAs(before, again);
+  console.log(`restart (state snapshot): ${again.blocks} blocks — ${sameAs(before, again) ? 'same state' : 'DIFFERENT'}, ${fromSnap ? 'loaded from the snapshot' : 'snapshot NOT used'}`);
 
   const file = path.join(tmp, 'b', 'devnet', 'blocks.dat');
   const js = JSON.parse(execFileSync(process.execPath, [path.join(here, 'replay.mjs'), 'devnet', file], { stdio: ['ignore', 'pipe', 'ignore'] }).toString());
@@ -61,3 +75,4 @@ try {
   console.log(`JavaScript node reading the file written by Rust: ${js.blocks} blocks, ${js.disq} disqualified — ${ok ? 'same state as the Rust node' : 'DIFFERENT'}`);
   if (!same || !ok) process.exitCode = 1;
 } catch (e) { console.error('FAILED: ' + e.stack); process.exitCode = 1; }
+for (const p of procs) { try { p.kill(); } catch {} } // (the node's log pipe would keep this script running)

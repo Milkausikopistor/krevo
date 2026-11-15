@@ -869,7 +869,8 @@ producing red blocks — the natural path for growth.
 * **Bounded state:** storage mass makes growing the UTXO set expensive.
 * **State commitment (MuHash3072):** each header commits to the full state. This lets a new node
   download a *snapshot* of the state and verify it against the headers — without downloading the
-  history (pruned sync, not yet implemented; see roadmap).
+  history (pruned sync, not yet implemented; see roadmap). The Rust node already uses the same check
+  for its own local snapshots: the UTXO set it reloads must re-commit to the chain's MuHash.
 * **More blocks per second:** the DAG scales by increasing the block rate (the 32 blocks/s simulation
   produced no red blocks), and k adjusts automatically.
 * **The cost of privacy:** private outputs can never be removed from the set (nobody knows which were
@@ -965,8 +966,11 @@ money** until the items below are resolved:
    ~11–18 s in pure JavaScript.
 4. **PoW security is probabilistic.** Whoever controls more than 50% of the hashrate can reorganize
    recent history, as in any PoW system.
-5. **Finality and pruning are not implemented.** The current node keeps every block and revalidates
-   everything on restart. Still missing: body pruning, pruning proofs and snapshot sync.
+5. **Pruning is only a local policy, and there is no consensus finality.** The Rust node restarts from
+   a state snapshot and, with `--prune`, drops the history below a *pruning point* and refuses any
+   chain that forks off below it — a local finality, as on a pruned Bitcoin node; the JavaScript node
+   keeps every block and revalidates everything on restart. Still missing: pruning proofs and snapshot
+   sync, so that new nodes do not need archival peers.
 6. **The Security Fund has a known weak spot:** a miner can arrange fees "off-chain" with users to
    avoid the half that goes to the fund. With tiny fees the incentive is small, but it exists.
 7. **Quantum computing** threatens secp256k1 in the long term (as it does Bitcoin, Kaspa and Monero).
@@ -1014,11 +1018,12 @@ money** until the items below are resolved:
    identical state, and a mixed JavaScript/Rust network with miners and wallets. Its constant-time wallet
    code, compiled to WebAssembly, already handles every secret of the JavaScript wallets (section 4.18),
    and its native full-chain prover (`krevod prove`) serves the desktop wallets. Still to do: measuring
-   constant time on more CPUs and engines, a key-value database with pruning, parallel validation in the
-   rusty-kaspa style. The JavaScript version remains the executable specification and the source of
+   constant time on more CPUs and engines, a key-value database (state snapshots and optional pruning
+   are done; the snapshot is still rewritten whole), parallel validation in the rusty-kaspa style. The JavaScript version remains the executable specification and the source of
    test vectors.
 2. **Independent audits** of the cryptography and consensus.
-3. **Pruning + pruning proofs + snapshot sync** (nodes with constant disk usage).
+3. **Pruning proofs + snapshot sync** (new nodes that start from a verified state instead of the whole
+   history; pruning with constant disk usage already exists in the Rust node as a local policy).
 4. **Wallet ecosystem:** BIP-39 recovery phrases (section 4.5) and trustless light wallets (section 4.14)
    are done, and the light wallet runs in browsers and on phones as an installable app; next come native
    mobile packaging, hardware wallet apps (Ledger/Trezor)

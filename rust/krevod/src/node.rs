@@ -24,6 +24,11 @@ use std::time::Duration;
 const PROTOCOL_VERSION: u64 = 1;
 const MAX_MSG: usize = 8 * 1024 * 1024;
 const STEM_PROBABILITY: f64 = 0.9;
+/// A state snapshot (and, on a pruned node, a pruning round) every max(this many new blocks, a
+/// quarter of the blocks the engine keeps). The snapshot is rewritten whole (~1.6 KB per kept block),
+/// so a growing interval bounds the disk writes to ~4× its size per its own size in new blocks, and a
+/// restart never re-validates more than about a quarter of what the node keeps.
+const SNAPSHOT_EVERY_BLOCKS: u64 = 6_000;
 
 pub struct Peer { pub id: u64, pub addr: String, pub outbound: bool, pub ready: bool, pub score: i32, pub listen: Option<String>, tx: Sender<Vec<u8>>, sock: TcpStream }
 
@@ -53,6 +58,9 @@ pub struct Node {
     pub template_cache: HashMap<String, Value>,
     rng: u64,
     pub to_connect: Vec<String>,
+    /// Pruning depth (blue score) when the node prunes (`--prune`); None = archival node.
+    pub prune_depth: Option<u64>,
+    snap_blocks: u64,
 }
 
 pub type Shared = Arc<(Mutex<Node>, Condvar)>;
@@ -91,6 +99,7 @@ impl Node {
             requested: HashMap::new(), stem_peer: None, stem_since: 0, embargo: HashMap::new(),
             nonce: to_hex(&seed[..8]), port, rpc_host, rpc_port, max_peers: 24, template_cache: HashMap::new(),
             rng: u64::from_le_bytes(seed[8..].try_into().unwrap()) | 1, to_connect: vec![],
+            prune_depth: None, snap_blocks: 0,
         }
     }
     fn rand(&mut self) -> f64 {
@@ -98,15 +107,83 @@ impl Node {
         (self.rng >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    /// Reloads the blocks from disk (the same file as the JavaScript node).
-    pub fn load(&mut self) {
-        let Some(st) = &self.storage else { return };
+    /// Reloads the node from disk. With a state snapshot (`state.snap`): loads it, attaches the block
+    /// bodies it needs from `blocks.dat` without validating them again, and validates only the blocks
+    /// that arrived after it. Without one (or with an unusable one): validates `blocks.dat` from the
+    /// genesis, as the JavaScript node does, and then writes a snapshot. Ok(true): it started from the snapshot.
+    pub fn load(&mut self) -> Result<bool, String> {
+        let Some(st) = &self.storage else { return Ok(false) };
         let t = now_ms();
         let blocks = st.read_all();
-        let mut n = 0;
-        for b in blocks { if let AddResult::Accepted { .. } = self.c.add_block(b, now_ms(), true) { n += 1; } }
+        let path = st.snapshot_path();
+        let resync = format!("Delete {} to sync again from peers.", st.dir.display());
+        let snap = if path.exists() {
+            match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| crate::snapshot::decode(&self.params, &b)) {
+                Ok(l) => Some(l),
+                Err(e) => { log(&format!("ignoring the state snapshot ({e}): validating blocks.dat from the start")); None }
+            }
+        } else { None };
+        if let Some(l) = snap {
+            let missing = l.missing_bodies(&blocks);
+            if missing == 0 {
+                let (c, later) = l.finish(blocks);
+                self.c = c;
+                let mut n = 0;
+                for b in later { if let AddResult::Accepted { .. } = self.c.add_block(b, now_ms(), true) { n += 1; } }
+                log(&format!("state snapshot loaded ({} blocks{}) + {n} newer block(s) validated, in {:.1} s",
+                    self.c.store.gd.len(), if self.c.pruning_point.is_some() { ", pruned" } else { "" }, (now_ms() - t) as f64 / 1000.0));
+                self.snap_blocks = self.c.blocks_count - n;
+                self.after_change();
+                return Ok(true);
+            }
+            if l.c.pruning_point.is_some() {
+                return Err(format!("the data folder is inconsistent: blocks.dat lacks {missing} block(s) that the pruned state snapshot needs, and a pruned folder cannot be rebuilt from the start. {resync}"));
+            }
+            log(&format!("the state snapshot needs {missing} block(s) that blocks.dat lacks: validating blocks.dat from the start"));
+        }
+        let (mut n, mut orphans) = (0, 0);
+        for b in blocks {
+            match self.c.add_block(b, now_ms(), true) {
+                AddResult::Accepted { .. } => n += 1,
+                AddResult::Orphan { .. } => orphans += 1,
+                _ => {}
+            }
+        }
+        // blocks are appended only after their parents, so a full file never has orphans: this one
+        // was compacted by pruning, and without its state snapshot it cannot be used
+        if orphans > 0 {
+            self.c = Consensus::new(self.params.clone());
+            return Err(format!("blocks.dat belongs to a pruned node ({orphans} block(s) without their parents) and its state snapshot is missing or unusable. {resync}"));
+        }
         if n > 0 { log(&format!("{n} blocks reloaded from disk in {:.1} s", (now_ms() - t) as f64 / 1000.0)); }
         self.after_change();
+        if n > 0 { self.checkpoint(true); } // the next restart starts from here
+        Ok(false)
+    }
+
+    /// Writes a state snapshot when due (or when forced); on a pruned node, prunes first and then
+    /// compacts blocks.dat. Order matters for crash safety: the new snapshot is on disk before
+    /// blocks.dat loses the bodies the old one needed.
+    pub fn checkpoint(&mut self, force: bool) {
+        let Some(st) = &self.storage else { return };
+        let now = now_ms();
+        let new_blocks = self.c.blocks_count.saturating_sub(self.snap_blocks);
+        if !force && new_blocks < SNAPSHOT_EVERY_BLOCKS.max(self.c.store.gd.len() as u64 / 4) { return; }
+        let pruned = match self.prune_depth { Some(d) => self.c.prune(d), None => None };
+        match crate::snapshot::save(&self.c, &st.snapshot_path()) {
+            Ok(bytes) => log(&format!("state snapshot written: {} blocks, {:.1} MB, in {:.1} s", self.c.store.gd.len(), bytes as f64 / 1e6, (now_ms() - now) as f64 / 1000.0)),
+            Err(e) => { log(&format!("could not write the state snapshot: {e}")); return; }
+        }
+        if let Some(r) = pruned {
+            let kept: Vec<&Block> = self.c.order.iter().filter_map(|h| self.c.blocks.get(h).map(|b| b.as_ref())).collect();
+            let n = kept.len();
+            match st.rewrite(kept.into_iter()) {
+                Ok(()) => log(&format!("pruned: pruning point {} (blue score {}), {} block(s) forgotten, {} body(ies) dropped; blocks.dat now holds {n}",
+                    &to_hex(&r.pruning_point)[..12], self.c.store.gd[&r.pruning_point].blue_score, r.forgotten, r.bodies_dropped)),
+                Err(e) => log(&format!("could not compact blocks.dat: {e}")),
+            }
+        }
+        self.snap_blocks = self.c.blocks_count;
     }
 
     fn after_change(&mut self) {
@@ -253,7 +330,9 @@ impl Node {
             }
             "getdag" => {
                 let from = m["from"].as_u64().unwrap_or(0);
-                let mut hashes: Vec<(u64, String)> = self.c.store.gd.iter().filter(|(_, g)| g.blue_score >= from).map(|(h, g)| (g.blue_score, to_hex(h))).collect();
+                let mut hashes: Vec<(u64, String)> = self.c.store.gd.iter()
+                    .filter(|(h, g)| g.blue_score >= from && self.c.blocks.contains_key(*h)) // (a pruned node only offers what it can send)
+                    .map(|(h, g)| (g.blue_score, to_hex(h))).collect();
                 hashes.sort();
                 for ch in hashes.chunks(2000) {
                     let v: Vec<&String> = ch.iter().map(|x| &x.1).collect();
@@ -387,6 +466,7 @@ impl Node {
                 self.to_connect.extend(cand);
             }
             self.requested.retain(|_, t| now - *t <= 60_000);
+            self.checkpoint(false);
         }
     }
 }
@@ -479,7 +559,7 @@ pub fn connect(shared: &Shared, addr: String) {
 pub fn run(shared: Shared, seeds: Vec<String>) -> std::io::Result<()> {
     let (port, rpc_host, rpc_port, name, genesis) = {
         let mut n = lock_node(&shared.0);
-        n.load();
+        n.load().map_err(std::io::Error::other)?;
         for s in &seeds { if !n.known.contains(s) { n.known.push(s.clone()); } }
         (n.port, n.rpc_host.clone(), n.rpc_port, n.params.name, to_hex(&n.c.genesis_hash))
     };

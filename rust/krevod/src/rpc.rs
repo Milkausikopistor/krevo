@@ -150,13 +150,14 @@ fn colors(n: &Node) -> (HashSet<Hash>, HashSet<Hash>) {
 }
 
 fn block_summary(n: &Node, h: &Hash, col: &(HashSet<Hash>, HashSet<Hash>)) -> Value {
-    let b = &n.c.blocks[h];
+    let b = n.c.blocks.get(h); // (a pruned node may no longer keep the body)
     let gd = &n.c.store.gd[h];
     let miner = encode_address(&n.params, &n.c.miner_data[h]).filter(|_| !n.c.miner_data[h].is_empty());
+    let txids: Vec<String> = b.map(|b| b.txs[1..].iter().map(|t| t.id_hex()).collect()).unwrap_or_default();
     json!({
         "hash": to_hex(h), "parents": n.c.store.parents[h].iter().map(|h| to_hex(h)).collect::<Vec<_>>(), "blueScore": gd.blue_score,
-        "daaScore": gd.daa_score, "timestamp": b.header.timestamp, "txs": b.txs.len() - 1,
-        "txids": b.txs[1..].iter().map(|t| t.id_hex()).collect::<Vec<_>>(), "chain": col.0.contains(h),
+        "daaScore": gd.daa_score, "timestamp": n.c.headers[h].timestamp, "txs": txids.len(),
+        "txids": txids, "chain": col.0.contains(h),
         "color": if col.1.contains(h) { "red" } else { "blue" }, "tip": n.c.tips.contains(h), "miner": miner,
     })
 }
@@ -195,7 +196,7 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
             let Some(h) = n.c.tx_index.get(&txid).copied() else {
                 return Err(if n.c.tx_status(&txid)["status"] == "accepted" { "accepted just now: the proof will be ready at the next block".into() } else { "transaction not accepted".into() });
             };
-            let accepted = &n.c.acc[&h].accepted;
+            let accepted = &n.c.acc.get(&h).ok_or("this pruned node no longer keeps that block")?.accepted;
             let idx = accepted.iter().position(|x| *x == txid).ok_or("transaction not accepted")?;
             let merkle = merkle_proof(accepted, idx);
             let hscore = n.c.store.gd[&h].blue_score;
@@ -237,7 +238,8 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
             let work = calc_work(v.bits).to_f64().unwrap_or(0.0);
             let view = n.c.virtual_view();
             Ok(json!({
-                "network": n.params.name, "genesis": to_hex(&n.c.genesis_hash), "blocks": n.c.store.gd.len(), "tips": n.c.tips.len(),
+                "network": n.params.name, "genesis": to_hex(&n.c.genesis_hash), "blocks": n.c.blocks_count + 1, "tips": n.c.tips.len(),
+                "pruned": n.c.pruning_point.is_some(), "pruningPoint": n.c.pruning_point.map(|h| to_hex(&h)),
                 "virtual": { "blueScore": v.gd.blue_score, "daaScore": v.gd.daa_score, "selectedParent": v.gd.selected_parent.map(|h| to_hex(&h)), "parents": v.parents.len() },
                 "difficulty": work, "target": target.to_str_radix(16), "blocksPerSecond": (bps * 100.0).round() / 100.0,
                 "hashrate": (work * bps).round(), "mempool": n.mempool.txs.len(), "peers": n.peers.values().filter(|x| x.ready).count(),
@@ -359,7 +361,7 @@ pub fn dispatch(n: &mut Node, method: &str, p: &Value) -> Result<Value, String> 
         }
         "getblock" => {
             let h = h32(p_str(p, "hash")?)?;
-            let b = n.c.blocks.get(&h).cloned().ok_or("unknown block")?;
+            let b = n.c.blocks.get(&h).cloned().ok_or(if n.c.headers.contains_key(&h) { "this pruned node no longer keeps that block's body" } else { "unknown block" })?;
             let col = colors(n);
             let mut r = block_summary(n, &h, &col);
             let gd = &n.c.store.gd[&h];

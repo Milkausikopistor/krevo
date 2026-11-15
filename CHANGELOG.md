@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+**Rust node (krevod)** (#2)
+- State snapshots: the node writes `state.snap` (every 6,000 new blocks, or a quarter of what it
+  keeps if more) and restarts from it, validating only the newer blocks — 0.11 s instead of 1.9 s for
+  3,000 blocks. The snapshot is checksummed and its UTXO set must re-commit to the chain's MuHash;
+  an unusable one is ignored (full re-validation, as before). `blocks.dat` keeps its format.
+- Optional pruning: `krevod node --prune [--prune-depth N]` keeps only the recent history (default
+  ~3 hours of blocks) and compacts `blocks.dat`, so disk and memory stay bounded. A pruned node
+  cannot serve old blocks and refuses chains that fork off below its pruning point; its folder is not
+  readable by the JavaScript node. It does not offer peers blocks whose bodies it has dropped.
+- Tests: a pruned engine validates every block exactly like an archival one (parallel blocks,
+  reorganizations, red blocks, shielded coinbases, repeated snapshot reloads); restart from disk,
+  crash between the snapshot and the compaction, damaged and tampered snapshots, local finality.
+
 **Web wallet**
 - Translations: every screen goes through a small dictionary (`src/web/i18n.js`), with Portuguese as
   the first translation. The language follows the browser and can be changed in Settings; amounts
